@@ -217,6 +217,31 @@ Per the owner's updated decision, the authorized remotes are `origin`
 treated as intentional. No remote configuration was changed, and nothing was
 pushed to `forge`.
 
+### Actual push result
+
+| Location | Result |
+| --- | --- |
+| local `main` | `9f424b602097ad89e8a8bb9e8cb8023fa0239c4c` |
+| `origin/main` | **PUSHED** — fast-forward `95fffd5..9f424b6`, verified |
+| `originn/main` | **NOT PUSHED** — remains at `95fffd5` |
+| `forge` | Not pushed, by instruction |
+
+The `originn` push could not be completed from this environment:
+
+- The configured HTTPS transport could not authenticate — no GitHub CLI, no
+  configured credential helper, and no stored credential or netrc entry exist.
+- A one-off push to the same repository over SSH was attempted **without
+  altering any remote configuration**. GitHub answered:
+  `ERROR: Permission to reot66/bs-os.git denied to 0xrezza.`
+  The SSH key authenticates as account `0xrezza`, which has **read-only** access
+  to `reot66/bs-os`.
+
+Read access was confirmed to work, so the repository and branch are correct; the
+blocker is strictly write authorization. No force-push, no remote reconfiguration,
+and no credential was written to disk to work around this. The commit must be
+pushed to `originn` by an account holding write access, or by granting write
+access to the `0xrezza` key.
+
 ## Independent review status
 
 AWAITING_INDEPENDENT_REVIEW
