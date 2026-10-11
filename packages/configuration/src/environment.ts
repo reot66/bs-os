@@ -287,7 +287,10 @@ export function parseLocalAdminEnvironment(source: EnvironmentSource): LocalAdmi
     database: readString(values, "BUSINESS_OS_DB_NAME"),
     user: readString(values, "BUSINESS_OS_DB_USER"),
     password: readString(values, "BUSINESS_OS_DB_PASSWORD"),
-    ssl: (values.BUSINESS_OS_DB_SSL ?? "false") === "true",
+    // The registry schema already transforms this value into a boolean,
+    // so it must be read as one. Comparing it against the string "true"
+    // would silently report an explicitly enabled TLS as disabled.
+    ssl: readBoolean(values, "BUSINESS_OS_DB_SSL"),
   });
 
   return Object.freeze({ environment: "local", database });

@@ -339,6 +339,69 @@ describe("local administration parser", () => {
     expect(config.database.user).toBe("business_os_local");
     expect(config.database.password).toBe(FAKE_ADMIN_PASSWORD);
   });
+
+  // Regression coverage for FND-008-FIX1: the registry schema transforms
+  // BUSINESS_OS_DB_SSL into a boolean, so reading it as a string made an
+  // explicitly enabled TLS report as disabled.
+  test("returns an explicitly enabled TLS as true", () => {
+    const config = parseLocalAdminEnvironment(adminSource({ BUSINESS_OS_DB_SSL: "true" }));
+
+    expect(config.database.ssl).toBe(true);
+  });
+
+  test("returns an explicitly disabled TLS as false", () => {
+    const config = parseLocalAdminEnvironment(adminSource({ BUSINESS_OS_DB_SSL: "false" }));
+
+    expect(config.database.ssl).toBe(false);
+  });
+
+  test("reports TLS as a real boolean rather than a string", () => {
+    const config = parseLocalAdminEnvironment(adminSource({ BUSINESS_OS_DB_SSL: "true" }));
+
+    expect(typeof config.database.ssl).toBe("boolean");
+  });
+
+  test("rejects a missing TLS setting instead of defaulting it", () => {
+    const source = adminSource();
+    delete source.BUSINESS_OS_DB_SSL;
+
+    const error = captureError(() => parseLocalAdminEnvironment(source));
+
+    expect(error.code).toBe("MISSING_REQUIRED_VALUE");
+    expect(error.variable).toBe("BUSINESS_OS_DB_SSL");
+  });
+
+  test("rejects invalid TLS values", () => {
+    for (const value of ["TRUE", "1", "0", "yes", "", "true "]) {
+      const error = captureError(() =>
+        parseLocalAdminEnvironment(adminSource({ BUSINESS_OS_DB_SSL: value })),
+      );
+
+      expect({ value, code: error.code }).toEqual({ value, code: "INVALID_VALUE" });
+    }
+  });
+
+  test("keeps the rest of the administration settings unchanged when TLS is enabled", () => {
+    const config = parseLocalAdminEnvironment(adminSource({ BUSINESS_OS_DB_SSL: "true" }));
+
+    expect(config.environment).toBe("local");
+    expect(config.database.host).toBe("127.0.0.1");
+    expect(config.database.port).toBe(55432);
+    expect(config.database.database).toBe("business_os_local");
+    expect(config.database.user).toBe("business_os_local");
+    expect(config.database.password).toBe(FAKE_ADMIN_PASSWORD);
+    expect(Object.isFrozen(config)).toBe(true);
+    expect(Object.isFrozen(config.database)).toBe(true);
+  });
+
+  test("the runtime parser still reports TLS correctly", () => {
+    expect(
+      parseRuntimeEnvironment(runtimeSource({ BUSINESS_OS_DB_SSL: "true" })).database.ssl,
+    ).toBe(true);
+    expect(
+      parseRuntimeEnvironment(runtimeSource({ BUSINESS_OS_DB_SSL: "false" })).database.ssl,
+    ).toBe(false);
+  });
 });
 
 describe("immutability and isolation", () => {
