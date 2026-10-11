@@ -9,8 +9,10 @@ machine while building the platform foundation. It is **development-only
 infrastructure**. It is not a production database, not a shared environment, and
 not a template for production deployment.
 
-This service contains **no application schema**. No tables, migrations, ORM, or
-business entities exist yet. Those are decided in later approved tasks.
+This service contains **no application schema**. No tables, migrations, or
+business entities exist yet. FND-007 selected Drizzle ORM as the data-access
+layer and provisioned a restricted application role, but deliberately created
+no schema. Those are decided in later approved tasks.
 
 All commands in this runbook are run from the **repository root**.
 
@@ -37,19 +39,25 @@ with `--env-file`. The Compose file reads these variables:
 | Variable | Meaning | Example value |
 | --- | --- | --- |
 | `BUSINESS_OS_DB_NAME` | Database name created on first start | `business_os_local` |
-| `BUSINESS_OS_DB_USER` | Database user created on first start | `business_os_local` |
+| `BUSINESS_OS_DB_USER` | Bootstrap administrator user | `business_os_local` |
 | `BUSINESS_OS_DB_PASSWORD` | Password for that user | *(your own strong value)* |
 | `BUSINESS_OS_DB_PORT` | Host port mapped to container port 5432 | `55432` |
+| `BUSINESS_OS_DB_APP_USER` | Restricted application role used by code | `business_os_app` |
+| `BUSINESS_OS_DB_APP_PASSWORD` | Password for the application role | *(your own strong value)* |
 
-All four are **required** except the port, which defaults to `55432`. The port
-is deliberately non-standard so it does not collide with a normal local
-PostgreSQL installation, which usually uses `5432`.
+All are **required** except the port, which defaults to `55432`. The port is
+deliberately non-standard so it does not collide with a normal local PostgreSQL
+installation, which usually uses `5432`.
+
+The first four variables configure the **bootstrap administrator**, which owns
+the local cluster. The last two configure the **application role**, which is the
+account your code should use. See the Application Role section below.
 
 ### `.env.example`
 
 `.env.example` is committed and contains **example values only**. Its password
-value is the literal placeholder `REPLACE_WITH_STRONG_LOCAL_PASSWORD`, which is
-not a usable credential.
+values are the literal placeholders `REPLACE_WITH_STRONG_LOCAL_PASSWORD` and
+`REPLACE_WITH_STRONG_LOCAL_APP_PASSWORD`, which are not usable credentials.
 
 ### `.env`
 
@@ -215,6 +223,226 @@ Also note that `POSTGRES_USER`, `POSTGRES_PASSWORD`, and `POSTGRES_DB` are only
 applied when the data directory is **empty**. Changing them in `.env` after the
 volume already has data has no effect on the existing cluster.
 
+## Drizzle Database Foundation
+
+FND-007 selected the database access layer:
+
+- **Drizzle ORM** provides typed, parameterized data access.
+- **`pg`** (node-postgres) provides the connection pool.
+- **`@business-os/database`** is the shared package at `packages/database`.
+
+Drizzle is used through its supported PostgreSQL integration:
+
+```ts
+import { drizzle } from "drizzle-orm/node-postgres";
+```
+
+Bun is the current development and production runtime. The shared package is
+built as portable Node-compatible ESM, but it uses no Bun-specific APIs and runs
+on Bun. The rationale is recorded in `docs/adr/0002-runtime-portability-and-drizzle.md`.
+
+The package exposes two functions:
+
+```ts
+import { createDatabase, parseDatabaseConfig } from "@business-os/database";
+
+const config = parseDatabaseConfig({
+  host: "127.0.0.1",
+  port: 55432,
+  database: "business_os_local",
+  user: process.env.BUSINESS_OS_DB_APP_USER,
+  password: process.env.BUSINESS_OS_DB_APP_PASSWORD,
+  ssl: false,
+});
+
+const database = createDatabase(config);
+
+await database.ping();
+await database.close();
+```
+
+`parseDatabaseConfig` validates everything explicitly. It never reads
+`process.env`, `Bun.env`, or `.env` itself, so your application decides where
+configuration comes from. `createDatabase` does not connect until the first
+query, and there is no global singleton: you own the lifecycle and must call
+`close()`.
+
+No schema, migration, or `drizzle-kit` setup exists yet.
+
+## Application Role
+
+Local development uses two separate accounts:
+
+| Account | Purpose | Power |
+| --- | --- | --- |
+| `business_os_local` | Bootstrap administrator | Cluster superuser |
+| `business_os_app` | Application runtime | Restricted |
+
+The application role is deliberately **not** a superuser. It has `LOGIN` and is
+granted `CONNECT` on the database and `USAGE` on the `public` schema. It is
+explicitly denied `SUPERUSER`, `CREATEDB`, `CREATEROLE`, `REPLICATION`, and
+`BYPASSRLS`, it inherits no administrative memberships, it owns nothing, and it
+cannot create tables or schemas.
+
+This separation matters because a superuser application account would allow a
+single compromised code path to destroy or read everything, and would make
+per-tenant access control unenforceable. Least privilege is also required by
+rule 06, which states the runtime database user is not a superuser.
+
+## Local Environment
+
+The application account is configured through two variables:
+
+| Variable | Purpose |
+| --- | --- |
+| `BUSINESS_OS_DB_APP_USER` | Application role name, `business_os_app` |
+| `BUSINESS_OS_DB_APP_PASSWORD` | Password for that role |
+
+Configure them securely:
+
+1. Copy `.env.example` to `.env` if you have not already.
+2. Replace `REPLACE_WITH_STRONG_LOCAL_APP_PASSWORD` with a strong local-only
+   password of at least 40 random characters.
+3. Keep the file readable only by you:
+
+```bash
+chmod 600 .env
+```
+
+Generate a suitable password with:
+
+```bash
+openssl rand -base64 48 | tr -d '\n' | tr '/+' '_-' | cut -c1-40
+```
+
+Do not reuse the administrator password for the application role. Do not commit
+the real `.env`; it is already ignored by Git.
+
+## Provisioning
+
+The application role is created by a developer-only tool. Run it from the
+repository root:
+
+```bash
+bun run packages/database/tools/local/provision-role.ts
+```
+
+The tool connects as the bootstrap administrator, confirms PostgreSQL 18.6 on
+`127.0.0.1`, creates the role if it does not exist, applies the restrictive
+attributes, grants the minimal permissions, and verifies the result.
+
+The password is never placed in a SQL string. It is sent as a query parameter
+into a transaction-local setting, and PostgreSQL quotes it server-side, so it
+cannot be injected and is never echoed.
+
+The command is **idempotent**. If the role already exists, the tool verifies
+attributes, effective privileges, and authentication, and it does **not** reset
+the password.
+
+## Verification
+
+Verify the role and the data-access layer at any time:
+
+```bash
+bun run packages/database/tools/local/verify-role.ts
+```
+
+This performs real checks: the application account authenticates, an incorrect
+password is rejected, `SELECT current_user` and `SELECT current_database` return
+the expected values, Drizzle executes `SELECT 1` through the pool, the role has
+no administrative attributes, and attempts to create a table or a schema are
+denied. It also confirms no test objects remain. Output is sanitized PASS/FAIL
+lines with SQLSTATE codes.
+
+## Application Connections
+
+Applications must use `@business-os/database` and pass configuration explicitly.
+Read the application account values from your own configuration layer and pass
+them to `parseDatabaseConfig`. Do not read `.env` inside the shared package, and
+do not connect as the administrator.
+
+Remember to declare the dependency in each consuming package:
+
+```json
+"dependencies": {
+  "@business-os/database": "workspace:*"
+}
+```
+
+## Permission Model
+
+Runtime credentials must not be used for schema migrations. Migrations change
+structure and therefore need `CREATE` on schemas, which the application role is
+denied on purpose. A future, separately approved migration account will own
+that responsibility, and migrations will be executed explicitly rather than
+automatically at service startup.
+
+Until that exists, there is no supported way to create tables, which is why the
+database currently has none. That is intended: schema ownership is designed in a
+later task, not improvised locally.
+
+## Troubleshooting (Database Access)
+
+### Application role cannot authenticate
+
+```text
+FATAL: password authentication failed for user "business_os_app"
+```
+
+The role's password does not match `BUSINESS_OS_DB_APP_PASSWORD`. Confirm the
+value in `.env`, then run `provision-role.ts`. If the role already exists, that
+tool will **not** reset the password; delete the role manually or ask the owner
+to re-provision it after an explicit decision.
+
+### Role already exists
+
+`provision-role.ts` reports that the role exists and verifies it instead of
+recreating it. This is expected and safe. If verification fails, the role's
+attributes or privileges have drifted and need manual reconciliation.
+
+### Wrong database
+
+```text
+Refusing to run: database must be business_os_local
+```
+
+Both tools refuse to touch any database other than the approved local one, so
+they cannot accidentally modify another project. Fix `BUSINESS_OS_DB_NAME` in
+`.env`.
+
+### Missing environment variables
+
+```text
+FAIL  Missing required environment variable: BUSINESS_OS_DB_APP_PASSWORD
+```
+
+The tools read the `.env` file at the repository root. Run them from the
+repository root, and confirm `.env` defines the application account variables.
+
+### PostgreSQL unavailable
+
+Connection errors mean the container is not running. Start it with the command
+in the Starting the database section above, then confirm health with `ps`.
+
+### Database permission failures
+
+```text
+ERROR: permission denied for database business_os_local
+ERROR: permission denied for schema public
+ERROR: must be owner of ...
+```
+
+This usually means you are connected as the wrong account. Application code must
+use `business_os_app`, not the administrator, and must not attempt to create
+tables or schemas.
+
+### Connection pool failures
+
+"Too many clients already" means the pool size exceeds what the server allows.
+Lower `maxPoolSize` in the configuration you pass to `parseDatabaseConfig`, or
+raise PostgreSQL `max_connections` for local development. `ping()` failures are
+reported with a SQLSTATE code; raw driver messages are never surfaced.
+
 ## Troubleshooting
 
 ### Docker daemon unavailable
@@ -326,10 +554,50 @@ Specifically, this setup is development-only because:
 - TLS is off. Connections are local plaintext.
 - There are no backups, no monitoring, no alerting, and no audit logging.
 - The `business_os_local` user is a PostgreSQL **superuser**. That is acceptable
-  only for a throwaway local container. Any runtime application must connect with
-  a **non-superuser** role with narrowly granted privileges.
+  only for a throwaway local container and only for provisioning. Any runtime
+  application must connect with the restricted `business_os_app` role.
 - Only a single service is defined here. There is no replication, failover, or
   high availability.
+
+### Database access security
+
+The properties that apply to database access specifically:
+
+- **Local development-only credentials.** Both passwords are developer
+  credentials for a local container on one machine.
+- **SCRAM-SHA-256 TCP authentication.** The cluster is initialized with
+  `--auth-host=scram-sha-256`, and passwords are stored as SCRAM verifiers
+  rather than plaintext.
+- **Least privilege.** The runtime role `business_os_app` is not a superuser,
+  cannot create databases or roles, cannot replicate, cannot bypass row-level
+  security, inherits no administrative memberships, owns nothing, and can create
+  neither tables nor schemas.
+- **No committed secrets.** `.env` is ignored by Git, `.env.example` contains
+  only placeholders, and the shared database package never logs passwords or
+  connection URLs. Validation errors identify the offending key without
+  exposing its value.
+- **No privileged runtime connections.** Application code must use
+  `business_os_app`. Using the administrator account for runtime work would
+  defeat least privilege entirely.
+- **Explicit TLS.** `parseDatabaseConfig` requires an explicit `ssl` value and
+  never disables certificate validation globally. The local tools pass
+  `ssl: false` only because they connect to loopback.
+
+### Production requirements still outstanding
+
+Production is **not** addressed by this runbook and will require separate,
+explicitly reviewed decisions covering:
+
+- Credential and secret management, with no credentials in images or
+  repositories.
+- Mandatory TLS with certificate validation for every connection.
+- Automated backup, restore testing, and recovery objectives.
+- Network isolation and restricted database ingress.
+- Monitoring, alerting, and audit logging.
+- Managed upgrade and version policy.
+- Separate runtime, migration, and administrative accounts.
+
+Nothing in the local setup should be copied into production unchanged.
 
 Production will require separate, explicitly reviewed decisions covering
 credential and secret management, backup and restore, network isolation, TLS,

@@ -1,0 +1,25 @@
+{
+  "name": "@business-os/database",
+  "version": "0.0.0",
+  "private": true,
+  "type": "module",
+  "main": "./dist/index.js",
+  "types": "./dist/index.d.ts",
+  "exports": {
+    ".": {
+      "types": "./dist/index.d.ts",
+      "default": "./dist/index.js"
+    }
+  },
+  "scripts": {
+    "typecheck": "bunx --bun tsc --noEmit -p tsconfig.json",
+    "build": "bun build ./src/index.ts --target node --format esm --packages external --outdir ./dist && bunx --bun tsc --emitDeclarationOnly -p tsconfig.json"
+  },
+  "dependencies": {
+    "drizzle-orm": "0.45.4",
+    "pg": "8.23.1"
+  },
+  "devDependencies": {
+    "@types/pg": "8.23.1"
+  }
+}
