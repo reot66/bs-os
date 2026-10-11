@@ -1,0 +1,28 @@
+# Environment and credentials
+.env
+.env.*
+!.env.example
+*.pem
+*.key
+*.p12
+*.pfx
+
+# Dependencies and generated files
+node_modules/
+dist/
+build/
+coverage/
+.next/
+.turbo/
+.cache/
+*.tsbuildinfo
+
+# Logs and local editor files
+*.log
+.DS_Store
+.idea/
+.vscode/
+
+# Temporary local archives
+agent_v2.zip
+agent_v2(1).zip

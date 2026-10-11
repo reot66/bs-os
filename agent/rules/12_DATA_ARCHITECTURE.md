@@ -1,0 +1,22 @@
+# Deep Data Architecture
+
+- هر entity یک Domain Owner دارد.
+- Canonical Business/Branch/Customer فقط Core.
+- UUIDv7 preferred internal ID؛ human-readable business number جدا.
+- Module → Core FK/reference مجاز؛ Core → Module ممنوع؛ cross-module FK محدود/ممنوع.
+- Strong consistency داخل aggregate/domain؛ eventual consistency بین modules.
+- Transaction boundary کوچک و domain-local.
+- Important events: transactional outbox + consumer inbox/idempotency.
+- Domain events معنای business دارند، نه raw row changed.
+- Standard event envelope: event id/type/schema version/tenant/business/aggregate/time/correlation/causation/payload.
+- Repositories around aggregate/domain، نه table-per-repository.
+- Commands/Queries conceptually جدا، بدون الزام full CQRS.
+- Optimistic concurrency برای entityهای مناسب.
+- UTC timestamps؛ Money typed/decimal-safe؛ binary float برای مالی ممنوع.
+- JSONB فقط metadata/flexible data، نه فرار از schema design.
+- Custom Fields future engine؛ low-adoption field مستقیماً core column نشود.
+- External IDs جدا از internal IDs.
+- Tenant-aware uniqueness.
+- Large migration/backfill: Expand–Migrate–Contract.
+- Module migration حق تغییر schema module دیگر ندارد.
+- Business logic داخل DB trigger/stored procedure به‌صورت پیش‌فرض ممنوع.

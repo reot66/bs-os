@@ -1,0 +1,21 @@
+# Dependency, Supply-chain & Application Security
+
+- Dependency جدید نیاز/maintenance/license/security/cost review دارد.
+- Critical dependencies owner و controlled version دارند.
+- Lockfile + deterministic install.
+- Vulnerability/license/transitive dependency scanning در CI.
+- Security exception: reason/mitigation/owner/expiry.
+- Build CI بدون production customer data/secrets.
+- Container minimal, scanned, non-root where possible.
+- Secret scanning/rotation و key versioning.
+- Do not invent cryptography.
+- Auth/session/token baseline مرکزی.
+- Threat classes: XSS, CSRF, SQL/command injection, SSRF, file upload, resource exhaustion.
+- Website MVP raw custom JS آزاد ندارد.
+- External calls timeout/retry policy اجباری.
+- Storefront/Dashboard/Control Plane security boundaries متفاوت.
+- Security-sensitive PRها review قوی‌تر.
+- High-risk capabilityها threat model کوتاه قبل از توسعه.
+- Security incident response + vulnerability reporting path.
+- OSS abandonment strategy؛ fork آخرین راه.
+- SBOM/provenance later for enterprise/standalone.

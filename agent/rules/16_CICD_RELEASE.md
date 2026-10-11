@@ -1,0 +1,22 @@
+# CI/CD & Release Engineering
+
+- Trunk-based سبک؛ `main` همیشه deployable.
+- Short-lived branches + PR review.
+- Feature بزرگ = small incremental PRs + feature flags.
+- PR gates: lint/typecheck/unit/integration/contracts/tenant/migration/build.
+- Core changes broader regression.
+- Build Once, Deploy Many.
+- Immutable/pinned artifacts؛ no `latest` in production.
+- Local → CI → Preview(optional) → Staging → Production promotion.
+- Staging production-like با scale کوچک‌تر.
+- Preflight + migration compatibility + health gates.
+- DB changes Expand–Migrate–Contract.
+- Deploy ≠ Release؛ feature flag progressive activation.
+- Rollback application/config جدا از data recovery.
+- Manual production file/container edits ممنوع.
+- IaC/GitOps-ready; production state version-controlled.
+- Secrets environment-scoped و خارج از source/build logs.
+- Worker job schema/version/idempotency compatibility.
+- Scheduler jobs single-execution/distributed-lock safe.
+- Shared/Dedicated/Standalone از artifacts یکسان.
+- Deployment Registry/audit + smoke/synthetic checks.

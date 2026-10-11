@@ -1,0 +1,21 @@
+# Performance & Scalability
+
+- Application layer stateless تا حد ممکن.
+- API/Dashboard، Storefront و Worker pools مستقل scale شوند.
+- PostgreSQL transactional source of truth تا وقتی نیاز واقعی تغییرش را ثابت کند.
+- Connection pooling از ابتدا لحاظ شود.
+- Tenant-aware indexes بر اساس query patterns واقعی.
+- تمام list APIs limit/pagination دارند.
+- Heavy work async: imports, exports, media, email/SMS, social, analytics.
+- Queues workload-specific + retry/backoff/DLQ/idempotency.
+- Cache فقط با measurement و invalidation strategy.
+- Public websites از publish version + cache/CDN استفاده کنند.
+- Object storage/CDN برای files/media.
+- Search ابتدا PostgreSQL پشت abstraction.
+- High-volume telemetry از transactional events جدا شود.
+- Tenant-aware quota/rate limit از noisy neighbor جلوگیری کند.
+- Partitioning/read replicas/sharding فقط با نیاز واقعی.
+- Dedicated deployment یک scale/isolation valve است.
+- Microservice extraction فقط برای independent scale/deploy/failure/security/team need.
+- Performance budgets/load tests/capacity metrics تعریف شوند.
+- Cost per tenant/workload metric آینده است.
