@@ -345,3 +345,152 @@ describe("error logging", () => {
     expect(sink.output()).not.toContain(SQL_DETAIL);
   });
 });
+
+describe("context accessors are never executed (FND-010-SEC-FIX1)", () => {
+  const SECRET = "TEST_SECRET_DO_NOT_LEAK";
+
+  function contextWithGetter(field, returnValue, throws = false) {
+    const context = { service: "business-os-api" };
+    contextWithGetter.calls.push(field);
+    Object.defineProperty(context, field, {
+      get() {
+        contextWithGetter.calls.push("invoked");
+        if (throws) {
+          throw new Error(SECRET);
+        }
+        return returnValue;
+      },
+      enumerable: true,
+      configurable: true,
+    });
+    return context;
+  }
+  contextWithGetter.calls = [];
+
+  test.each([["module"], ["correlationId"], ["requestId"], ["service"]])(
+    "a %s getter is not executed and is rejected",
+    (field) => {
+      contextWithGetter.calls = [];
+      const context = contextWithGetter(field, SECRET);
+
+      let error;
+      try {
+        normalizeContext(context);
+      } catch (caught) {
+        error = caught;
+      }
+
+      expect({ invoked: contextWithGetter.calls.includes("invoked") }).toEqual({
+        invoked: false,
+      });
+      expect(error).toBeInstanceOf(TypeError);
+      expect({ containsSecret: error.message.includes(SECRET) }).toEqual({
+        containsSecret: false,
+      });
+    },
+  );
+
+  test("a throwing context getter is never invoked and is rejected instead", () => {
+    contextWithGetter.calls = [];
+    const context = contextWithGetter("module", null, true);
+
+    // The accessor's own throw must never surface: the field is rejected
+    // from its descriptor, before any getter could run.
+    let error;
+    try {
+      normalizeContext(context);
+    } catch (caught) {
+      error = caught;
+    }
+
+    expect({ invoked: contextWithGetter.calls.includes("invoked") }).toEqual({
+      invoked: false,
+    });
+    expect(error).toBeInstanceOf(TypeError);
+    expect(error.message).not.toContain(SECRET);
+  });
+
+  test("a hostile context object fails safely without exposing contents", () => {
+    const hostile = new Proxy(
+      { service: "business-os-api" },
+      {
+        getOwnPropertyDescriptor() {
+          throw new Error(SECRET);
+        },
+      },
+    );
+
+    let error;
+    try {
+      normalizeContext(hostile);
+    } catch (caught) {
+      error = caught;
+    }
+
+    expect(error).toBeInstanceOf(TypeError);
+    expect(error.message).not.toContain(SECRET);
+  });
+
+  test("a revoked context object fails safely", () => {
+    const revocable = Proxy.revocable({ service: "business-os-api" }, {});
+    revocable.revoke();
+
+    expect(() => {
+      normalizeContext(revocable.proxy);
+    }).toThrow(TypeError);
+  });
+
+  test("valid ordinary context still works", () => {
+    expect(
+      normalizeContext({
+        service: "business-os-api",
+        module: "catalog",
+        correlationId: "req-123",
+        requestId: "req-123",
+      }),
+    ).toEqual({
+      service: "business-os-api",
+      module: "catalog",
+      correlationId: "req-123",
+      requestId: "req-123",
+    });
+  });
+
+  test("unknown keys are still ignored and never read", () => {
+    contextWithGetter.calls = [];
+    const context = { service: "business-os-api" };
+    Object.defineProperty(context, "password", {
+      get() {
+        contextWithGetter.calls.push("invoked");
+        return PASSWORD;
+      },
+      enumerable: true,
+      configurable: true,
+    });
+
+    expect(normalizeContext(context)).toEqual({ service: "business-os-api" });
+    expect(contextWithGetter.calls.includes("invoked")).toBe(false);
+  });
+
+  test("parent and child loggers remain independent after the change", () => {
+    const sink = createSink();
+    const logger = createLogger({
+      service: "business-os-api",
+      level: "debug",
+      destination: sink,
+    });
+
+    logger.child({ module: "catalog", correlationId: "req-a" }).info("child");
+    logger.child({ module: "checkout", correlationId: "req-b" }).info("child");
+    logger.info("parent");
+
+    const [a, b, parent] = sink.records();
+
+    expect({ a: [a.module, a.correlationId], b: [b.module, b.correlationId] }).toEqual({
+      a: ["catalog", "req-a"],
+      b: ["checkout", "req-b"],
+    });
+    expect(parent.module).toBeUndefined();
+    expect(parent.correlationId).toBeUndefined();
+  });
+});

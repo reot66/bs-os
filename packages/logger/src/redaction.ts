@@ -148,6 +148,20 @@ function sanitizeNumber(value: number): number | string {
   return Number.isFinite(value) ? value : UNSAFE_VALUE;
 }
 
+/**
+ * Read an array's own `length` from its descriptor.
+ *
+ * `length` is an own, non-enumerable data property on every array, so a
+ * descriptor read avoids the indexed accessor path entirely. Returns
+ * undefined when the size cannot be determined safely.
+ */
+function arrayLength(value: unknown[]): number | undefined {
+  const descriptor = Object.getOwnPropertyDescriptor(value, "length");
+  const length = descriptor?.value;
+
+  return typeof length === "number" && Number.isInteger(length) && length >= 0 ? length : undefined;
+}
+
 function sanitizeArray(value: unknown[], state: SanitizeState, depth: number): unknown {
   if (state.seen.has(value)) {
     return UNSAFE_VALUE;
@@ -155,14 +169,43 @@ function sanitizeArray(value: unknown[], state: SanitizeState, depth: number): u
 
   state.seen.add(value);
 
-  const limit = Math.min(value.length, REDACTION_LIMITS.maxArrayLength);
+  const length = arrayLength(value);
+
+  if (length === undefined) {
+    return UNSAFE_VALUE;
+  }
+
+  const limit = Math.min(length, REDACTION_LIMITS.maxArrayLength);
   const output: unknown[] = [];
 
   for (let index = 0; index < limit; index += 1) {
-    output.push(sanitizeValue(value[index], state, depth + 1));
+    // Element values are read through descriptors. A JavaScript array can
+    // hold an accessor at a numeric index; reading `value[index]` would
+    // execute it. An accessor element is replaced by a placeholder and is
+    // never invoked.
+    const descriptor = Object.getOwnPropertyDescriptor(value, String(index));
+
+    if (descriptor === undefined) {
+      // Sparse array hole. JSON renders holes as null, so this keeps the
+      // output JSON-safe without inventing a value.
+      output.push(null);
+      continue;
+    }
+
+    if (descriptor.get !== undefined || descriptor.set !== undefined) {
+      output.push(UNSAFE_VALUE);
+      continue;
+    }
+
+    if (descriptor.enumerable !== true) {
+      output.push(null);
+      continue;
+    }
+
+    output.push(sanitizeValue(descriptor.value, state, depth + 1));
   }
 
-  if (value.length > limit) {
+  if (length > limit) {
     output.push(TRUNCATED_MARKER);
   }
 

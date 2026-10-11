@@ -78,29 +78,72 @@ export function validateContextValue(key: keyof LogContext, value: string): stri
 }
 
 /**
+ * The only context fields that may be promoted to trusted log fields.
+ *
+ * The list is closed on purpose: any other key is ignored, so a caller
+ * cannot place an arbitrary value — including a secret — into a trusted
+ * field.
+ */
+const TRUSTED_CONTEXT_FIELDS = Object.freeze([
+  "service",
+  "module",
+  "correlationId",
+  "requestId",
+] as const);
+
+/**
  * Validate context and return only the recognized fields.
  *
- * Unknown keys are silently ignored so that stray metadata — including a
- * key such as `password` — can never become a trusted log field. This
- * function never reads a value the caller did not supply as a string.
+ * Recognized fields are read through property descriptors, so an accessor
+ * defined for `service`, `module`, `correlationId`, or `requestId` is never
+ * invoked and its value is never adopted. Accessor-backed trusted fields are
+ * rejected with a generic `TypeError` that carries no input value.
+ *
+ * Unknown keys are ignored, and no property of an unrecognized key is read.
  */
 export function normalizeContext(context: LogContext | undefined): LogContext {
   if (context === undefined || context === null) {
     return {};
   }
 
-  if (typeof context !== "object" || Array.isArray(context)) {
+  if (typeof context !== "object") {
+    throw new TypeError("Log context must be an object");
+  }
+
+  let isArray: boolean;
+  let descriptors: PropertyDescriptorMap;
+
+  try {
+    isArray = Array.isArray(context);
+    descriptors = Object.getOwnPropertyDescriptors(context);
+  } catch {
+    // A hostile or revoked object. Its contents and any underlying
+    // exception message are deliberately not surfaced.
+    throw new TypeError("Log context could not be inspected safely");
+  }
+
+  if (isArray) {
     throw new TypeError("Log context must be an object");
   }
 
   const normalized: Record<string, string> = {};
 
-  for (const key of Object.keys(context)) {
-    if (!["service", "module", "correlationId", "requestId"].includes(key)) {
+  for (const key of TRUSTED_CONTEXT_FIELDS) {
+    const descriptor = descriptors[key];
+
+    if (descriptor === undefined) {
       continue;
     }
 
-    const value = (context as Record<string, unknown>)[key];
+    if (descriptor.get !== undefined || descriptor.set !== undefined) {
+      throw new TypeError(`Log context field ${key} must be a plain value`);
+    }
+
+    if (descriptor.enumerable !== true) {
+      continue;
+    }
+
+    const value = descriptor.value;
 
     if (value === undefined) {
       continue;
@@ -110,7 +153,7 @@ export function normalizeContext(context: LogContext | undefined): LogContext {
       throw new TypeError(`Log context field ${key} must be a string`);
     }
 
-    normalized[key] = assertSafeValue(value, key as keyof LogContext);
+    normalized[key] = assertSafeValue(value, key);
   }
 
   return Object.freeze(normalized) as LogContext;
@@ -118,5 +161,5 @@ export function normalizeContext(context: LogContext | undefined): LogContext {
 
 /** True when a context key is one of the trusted, promoted fields. */
 export function isTrustedContextKey(key: string): boolean {
-  return key === "service" || key === "module" || key === "correlationId" || key === "requestId";
+  return (TRUSTED_CONTEXT_FIELDS as readonly string[]).includes(key);
 }

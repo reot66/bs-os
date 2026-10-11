@@ -328,3 +328,125 @@ describe("known limitation", () => {
     expect(sanitized.notes).toBe(PASSWORD);
   });
 });
+
+describe("array accessors are never executed (FND-010-SEC-FIX1)", () => {
+  function arrayWithGetter(returnValue, throws = false) {
+    const array = [{ safe: 1 }];
+    Object.defineProperty(array, 0, {
+      get() {
+        arrayWithGetter.calls.push("invoked");
+        if (throws) {
+          throw new Error("boom");
+        }
+        return returnValue;
+      },
+      enumerable: true,
+      configurable: true,
+    });
+    return array;
+  }
+  arrayWithGetter.calls = [];
+
+  test("an array-index getter is not executed", () => {
+    arrayWithGetter.calls = [];
+    const array = arrayWithGetter("TEST_SECRET_DO_NOT_LEAK");
+
+    sanitizeLogMetadata({ list: array });
+
+    expect({ calls: arrayWithGetter.calls }).toEqual({ calls: [] });
+  });
+
+  test("an accessor returning a secret sentinel is never evaluated", () => {
+    arrayWithGetter.calls = [];
+    const array = arrayWithGetter("TEST_SECRET_DO_NOT_LEAK");
+
+    const output = JSON.stringify(sanitizeLogMetadata({ list: array }));
+
+    expect(output).not.toContain("TEST_SECRET_DO_NOT_LEAK");
+    expect(output).toContain("[UNSAFE]");
+  });
+
+  test("an array-index getter that throws is not executed", () => {
+    arrayWithGetter.calls = [];
+
+    expect(() => {
+      sanitizeLogMetadata({ list: arrayWithGetter(null, true) });
+    }).not.toThrow();
+
+    expect({ calls: arrayWithGetter.calls }).toEqual({ calls: [] });
+  });
+
+  test("an accessor element becomes the unsafe placeholder", () => {
+    arrayWithGetter.calls = [];
+
+    expect(sanitizeLogMetadata({ list: arrayWithGetter("x") })).toEqual({
+      list: ["[UNSAFE]"],
+    });
+  });
+
+  test("a normal array still serializes correctly", () => {
+    expect(sanitizeLogMetadata({ list: [1, "two", true, null, { a: 1 }] })).toEqual({
+      list: [1, "two", true, null, { a: 1 }],
+    });
+  });
+
+  test("a sparse array stays JSON-safe", () => {
+    const sparse = [];
+    sparse[2] = "value";
+
+    const output = sanitizeLogMetadata({ list: sparse });
+
+    expect(output).toEqual({ list: [null, null, "value"] });
+    expect(() => JSON.stringify(output)).not.toThrow();
+  });
+
+  test("a circular array remains bounded", () => {
+    const circular = [];
+    circular.push(circular);
+
+    expect(sanitizeLogMetadata({ list: circular })).toEqual({ list: ["[UNSAFE]"] });
+  });
+
+  test("nested arrays remain safe", () => {
+    expect(sanitizeLogMetadata({ a: [[{ password: PASSWORD }]] })).toEqual({
+      a: [[{ password: "[REDACTED]" }]],
+    });
+  });
+
+  test("existing nested credential redaction still applies inside arrays", () => {
+    const output = JSON.stringify(sanitizeLogMetadata({ list: [{ accessToken: TOKEN }] }));
+
+    expect(output).not.toContain(TOKEN);
+    expect(output).toContain("[REDACTED]");
+  });
+
+  test("array element limits and truncation still apply", () => {
+    const large = Array.from({ length: 250 }, (_, index) => index);
+    const output = sanitizeLogMetadata({ list: large });
+
+    expect(output.list.length).toBe(101);
+    expect(output.list[100]).toBe("[TRUNCATED]");
+  });
+
+  test("the original array is not mutated", () => {
+    const array = [{ keep: 1 }];
+
+    sanitizeLogMetadata({ list: array });
+
+    expect(array).toEqual([{ keep: 1 }]);
+  });
+
+  test("a hostile array proxy is contained without escaping", () => {
+    const hostile = new Proxy([], {
+      getOwnPropertyDescriptor() {
+        throw new Error("boom");
+      },
+    });
+
+    expect(() => {
+      sanitizeLogMetadata({ list: hostile });
+    }).not.toThrow();
+
+    expect(JSON.stringify(sanitizeLogMetadata({ list: hostile }))).not.toContain("boom");
+  });
+});
