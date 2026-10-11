@@ -12,9 +12,13 @@
   "scripts": {
     "typecheck": "bun run --filter '@business-os/*' typecheck",
     "build": "bun run --filter '@business-os/*' build",
-    "test": "bun run build && bun test"
+    "test": "bun run build && bun test",
+    "lint": "biome lint .",
+    "format:check": "biome format .",
+    "format": "biome format --write ."
   },
   "devDependencies": {
+    "@biomejs/biome": "2.5.15",
     "typescript": "5.9.3"
   }
 }
