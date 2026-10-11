@@ -1,0 +1,20 @@
+{
+  "name": "business-os",
+  "version": "0.0.0",
+  "private": true,
+  "type": "module",
+  "engines": {
+    "bun": ">=1.2.0 <2"
+  },
+  "workspaces": [
+    "packages/*"
+  ],
+  "scripts": {
+    "typecheck": "bun run --filter '@business-os/*' typecheck",
+    "build": "bun run --filter '@business-os/*' build",
+    "test": "bun run build && bun test"
+  },
+  "devDependencies": {
+    "typescript": "5.9.3"
+  }
+}
