@@ -10,7 +10,7 @@
     "packages/*"
   ],
   "scripts": {
-    "typecheck": "bun run --filter '@business-os/*' typecheck",
+    "typecheck": "bun run build && bun run --filter '@business-os/*' typecheck",
     "build": "bun run --filter '@business-os/*' build",
     "test": "bun run build && bun test",
     "lint": "biome lint .",
