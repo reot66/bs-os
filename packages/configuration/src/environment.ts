@@ -17,6 +17,7 @@ import {
   DEFAULT_LOG_LEVEL,
   ENVIRONMENT_VARIABLE_REGISTRY,
   LOCAL_ADMIN_PARSER_VARIABLES,
+  MIGRATION_PARSER_VARIABLES,
   REDACTED_VALUE,
   RUNTIME_PARSER_VARIABLES,
   findEnvironmentVariable,
@@ -95,6 +96,29 @@ export interface LocalAdminEnvironmentConfig {
   readonly database: LocalAdminDatabaseSettings;
 }
 
+/**
+ * Local-only schema-migration settings.
+ *
+ * These are the dedicated migrator credentials. They are structurally
+ * distinct from both the runtime application settings and the bootstrap
+ * administration settings so that neither can be substituted for the
+ * other by accident.
+ */
+export interface LocalMigrationDatabaseSettings {
+  readonly host: string;
+  readonly port: number;
+  readonly database: string;
+  readonly user: string;
+  readonly password: string;
+  readonly ssl: boolean;
+}
+
+/** Validated local migration configuration. */
+export interface LocalMigrationEnvironmentConfig {
+  readonly environment: RuntimeEnvironment;
+  readonly database: LocalMigrationDatabaseSettings;
+}
+
 /** Redacted, diagnostics-safe view of a configuration object. */
 export type EnvironmentSummary = Readonly<Record<string, unknown>>;
 
@@ -121,6 +145,8 @@ function schemaFor(
 const RUNTIME_SCHEMA = schemaFor(RUNTIME_PARSER_VARIABLES);
 
 const LOCAL_ADMIN_SCHEMA = schemaFor(LOCAL_ADMIN_PARSER_VARIABLES);
+
+const MIGRATION_SCHEMA = schemaFor(MIGRATION_PARSER_VARIABLES);
 
 /**
  * Reject undeclared `BUSINESS_OS_*` keys.
@@ -269,15 +295,7 @@ export function parseRuntimeEnvironment(source: EnvironmentSource): RuntimeEnvir
 export function parseLocalAdminEnvironment(source: EnvironmentSource): LocalAdminEnvironmentConfig {
   assertNoUnregisteredPlatformVariables(source);
 
-  const environmentValue = source.BUSINESS_OS_ENV;
-
-  if (environmentValue === undefined || environmentValue === "") {
-    throw new EnvironmentConfigError("MISSING_REQUIRED_VALUE", "BUSINESS_OS_ENV");
-  }
-
-  if (environmentValue !== "local") {
-    throw new EnvironmentConfigError("FORBIDDEN_IN_PRODUCTION", "BUSINESS_OS_ENV");
-  }
+  requireLocalEnvironment(source);
 
   const values = parseWith(LOCAL_ADMIN_SCHEMA, source);
 
@@ -290,6 +308,60 @@ export function parseLocalAdminEnvironment(source: EnvironmentSource): LocalAdmi
     // The registry schema already transforms this value into a boolean,
     // so it must be read as one. Comparing it against the string "true"
     // would silently report an explicitly enabled TLS as disabled.
+    ssl: readBoolean(values, "BUSINESS_OS_DB_SSL"),
+  });
+
+  return Object.freeze({ environment: "local", database });
+}
+
+/**
+ * Require an explicitly declared `local` runtime.
+ *
+ * Schema migration is a privileged, local-only operation. Refusing every
+ * other runtime here means a staging or production deployment cannot
+ * produce migration credentials through this parser at all, rather than
+ * producing them and relying on a later runtime check to refuse them.
+ */
+function requireLocalEnvironment(source: EnvironmentSource): void {
+  const environmentValue = source.BUSINESS_OS_ENV;
+
+  if (environmentValue === undefined || environmentValue === "") {
+    throw new EnvironmentConfigError("MISSING_REQUIRED_VALUE", "BUSINESS_OS_ENV");
+  }
+
+  if (environmentValue !== "local") {
+    throw new EnvironmentConfigError("FORBIDDEN_IN_PRODUCTION", "BUSINESS_OS_ENV");
+  }
+}
+
+/**
+ * Validate explicitly supplied local schema-migration values.
+ *
+ * This parser is for the dedicated migrator tooling only. It refuses any
+ * runtime other than `local`, never falls back to application or
+ * administrator credentials, and never provisions or modifies anything:
+ * it only validates and returns values.
+ *
+ * @param source Explicit environment values supplied by the caller.
+ * @returns A deeply frozen local migration configuration.
+ */
+export function parseLocalMigrationEnvironment(
+  source: EnvironmentSource,
+): LocalMigrationEnvironmentConfig {
+  assertNoUnregisteredPlatformVariables(source);
+
+  requireLocalEnvironment(source);
+
+  const values = parseWith(MIGRATION_SCHEMA, source);
+
+  const database = freezeSettings({
+    host: readString(values, "BUSINESS_OS_DB_HOST"),
+    port: readNumber(values, "BUSINESS_OS_DB_PORT"),
+    database: readString(values, "BUSINESS_OS_DB_NAME"),
+    user: readString(values, "BUSINESS_OS_DB_MIGRATOR_USER"),
+    password: readString(values, "BUSINESS_OS_DB_MIGRATOR_PASSWORD"),
+    // The registry schema transforms this into a boolean, so it must be
+    // read as one rather than compared against the string "true".
     ssl: readBoolean(values, "BUSINESS_OS_DB_SSL"),
   });
 
@@ -375,8 +447,9 @@ function displayableSettings(config: unknown): Record<string, unknown> {
  * Every registered variable that feeds a given database field.
  *
  * Both the runtime and the administration credential pairs map onto the
- * `user` and `password` fields, so both are considered. Redaction is
- * therefore correct regardless of which parser produced the object.
+ * `user` and `password` fields, so both are considered. The migration
+ * pair is considered as well. Redaction is therefore correct regardless
+ * of which parser produced the object.
  */
 function databaseVariablesForField(field: string): EnvironmentVariableDefinition<unknown>[] {
   return ENVIRONMENT_VARIABLE_REGISTRY.filter(
@@ -395,6 +468,10 @@ function databaseFieldFor(variable: string): string | undefined {
     case "BUSINESS_OS_DB_APP_USER":
       return "user";
     case "BUSINESS_OS_DB_APP_PASSWORD":
+      return "password";
+    case "BUSINESS_OS_DB_MIGRATOR_USER":
+      return "user";
+    case "BUSINESS_OS_DB_MIGRATOR_PASSWORD":
       return "password";
     case "BUSINESS_OS_DB_SSL":
       return "ssl";

@@ -1,0 +1,12 @@
+-- FND-011 Core baseline.
+--
+-- Establishes the Core schema namespace only. It intentionally creates
+-- no tables: FND-011 provides migration infrastructure, and rule 12
+-- assigns every entity a single domain owner. No tenant, user, role,
+-- organization, commerce, clinic, restaurant, payment, appointment or
+-- customer table belongs here, and no business seed data is introduced.
+--
+-- `IF NOT EXISTS` keeps this baseline idempotent: the privileged
+-- provisioning step may already have created the schema, in which case
+-- this statement is a structural no-op.
+CREATE SCHEMA IF NOT EXISTS core;

@@ -33,6 +33,9 @@ export {
   LOCAL_ADMIN_ENVIRONMENT_VARIABLE_NAMES,
   LOCAL_ADMIN_PARSER_VARIABLES,
   LOG_LEVELS,
+  MIGRATION_ENVIRONMENT_VARIABLES,
+  MIGRATION_ENVIRONMENT_VARIABLE_NAMES,
+  MIGRATION_PARSER_VARIABLES,
   REDACTED_VALUE,
   REGISTERED_ENVIRONMENT_VARIABLES,
   RUNTIME_ENVIRONMENTS,
@@ -62,6 +65,7 @@ export {
   areAllPlatformVariablesRegistered,
   findUnregisteredPlatformVariables,
   parseLocalAdminEnvironment,
+  parseLocalMigrationEnvironment,
   parseRuntimeEnvironment,
   summarizeEnvironmentConfig,
 } from "./environment.js";
@@ -72,6 +76,8 @@ export type {
   EnvironmentSummary,
   LocalAdminDatabaseSettings,
   LocalAdminEnvironmentConfig,
+  LocalMigrationDatabaseSettings,
+  LocalMigrationEnvironmentConfig,
   RuntimeDatabaseSettings,
   RuntimeEnvironmentConfig,
 } from "./environment.js";

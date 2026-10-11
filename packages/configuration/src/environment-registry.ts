@@ -42,6 +42,7 @@ export const ENVIRONMENT_VARIABLE_CATEGORIES = Object.freeze([
   "runtime-database",
   "database-infrastructure",
   "local-database-administration",
+  "local-database-migration",
 ] as const);
 
 export type EnvironmentVariableCategory = (typeof ENVIRONMENT_VARIABLE_CATEGORIES)[number];
@@ -56,10 +57,16 @@ export type EnvironmentVariableOwner = (typeof ENVIRONMENT_VARIABLE_OWNERS)[numb
  * `runtime` variables are visible to application configuration.
  * `local-administration` variables are reserved for authorized local
  * database tooling and are never returned by the runtime parser.
+ * `local-migration` variables are reserved for the schema-migration
+ * tooling. They are deliberately kept apart from both other scopes:
+ * migration credentials must never reach ordinary application
+ * configuration, and an application credential must never be usable to
+ * apply a migration.
  */
 export const ENVIRONMENT_VARIABLE_SCOPES = Object.freeze([
   "runtime",
   "local-administration",
+  "local-migration",
 ] as const);
 
 export type EnvironmentVariableScope = (typeof ENVIRONMENT_VARIABLE_SCOPES)[number];
@@ -69,8 +76,8 @@ export type EnvironmentVariableScope = (typeof ENVIRONMENT_VARIABLE_SCOPES)[numb
  *
  * Grouping expresses which variables travel together, so each parser is
  * assembled from metadata instead of a hand-written key list. It also
- * keeps the two database credential pairs unambiguously distinct from
- * the shared connection settings they both need.
+ * keeps the three database credential pairs unambiguously distinct from
+ * the shared connection settings they all need.
  */
 export const ENVIRONMENT_VARIABLE_GROUPS = Object.freeze([
   "environment",
@@ -78,6 +85,7 @@ export const ENVIRONMENT_VARIABLE_GROUPS = Object.freeze([
   "database-connection",
   "application-credentials",
   "administration-credentials",
+  "migration-credentials",
 ] as const);
 
 export type EnvironmentVariableGroup = (typeof ENVIRONMENT_VARIABLE_GROUPS)[number];
@@ -186,9 +194,10 @@ function define<TOutput>(
 /**
  * The authoritative environment-variable inventory.
  *
- * The first eight variables are runtime-visible. The last two are
- * reserved for local database administration and are deliberately NOT
- * part of runtime application configuration.
+ * The first eight variables are runtime-visible. The last four are
+ * reserved for local database administration and local schema
+ * migration, and are deliberately NOT part of runtime application
+ * configuration.
  */
 export const ENVIRONMENT_VARIABLE_REGISTRY: readonly EnvironmentVariableDefinition<unknown>[] =
   Object.freeze([
@@ -333,6 +342,36 @@ export const ENVIRONMENT_VARIABLE_REGISTRY: readonly EnvironmentVariableDefiniti
       restartRequired: true,
       description: "Password for the local-only bootstrap administration role.",
     }),
+    define({
+      variable: "BUSINESS_OS_DB_MIGRATOR_USER",
+      schema: databaseNameSchema,
+      category: "local-database-migration",
+      owner: "database",
+      scope: "local-migration",
+      group: "migration-credentials",
+      required: true,
+      defaultValue: undefined,
+      sensitive: false,
+      // Role names can reveal internal topology, so they stay redacted.
+      displaySafe: false,
+      restartRequired: true,
+      description: "Dedicated local role that applies versioned Core migrations.",
+    }),
+    define({
+      variable: "BUSINESS_OS_DB_MIGRATOR_PASSWORD",
+      schema: secretSchema,
+      category: "local-database-migration",
+      owner: "database",
+      scope: "local-migration",
+      group: "migration-credentials",
+      required: true,
+      defaultValue: undefined,
+      // A credential: classified once here, and never displayed.
+      sensitive: true,
+      displaySafe: false,
+      restartRequired: true,
+      description: "Password for the dedicated local Core migration role.",
+    }),
   ]);
 
 /** Every registered variable name, in registry order. */
@@ -354,6 +393,16 @@ export const RUNTIME_ENVIRONMENT_VARIABLES: readonly EnvironmentVariableDefiniti
 export const LOCAL_ADMIN_ENVIRONMENT_VARIABLES: readonly EnvironmentVariableDefinition<unknown>[] =
   indexRegistry((entry) => entry.scope === "local-administration");
 
+/**
+ * Registry entries reserved for local schema migration.
+ *
+ * These credentials are held apart from both runtime application
+ * credentials and local administrator credentials so that migration
+ * authority is never reachable from an ordinary application request.
+ */
+export const MIGRATION_ENVIRONMENT_VARIABLES: readonly EnvironmentVariableDefinition<unknown>[] =
+  indexRegistry((entry) => entry.scope === "local-migration");
+
 /** Variable names visible to the runtime parser. */
 export const RUNTIME_ENVIRONMENT_VARIABLE_NAMES: readonly string[] = Object.freeze(
   RUNTIME_ENVIRONMENT_VARIABLES.map((entry) => entry.variable),
@@ -362,6 +411,11 @@ export const RUNTIME_ENVIRONMENT_VARIABLE_NAMES: readonly string[] = Object.free
 /** Variable names reserved for local administration. */
 export const LOCAL_ADMIN_ENVIRONMENT_VARIABLE_NAMES: readonly string[] = Object.freeze(
   LOCAL_ADMIN_ENVIRONMENT_VARIABLES.map((entry) => entry.variable),
+);
+
+/** Variable names reserved for local schema migration. */
+export const MIGRATION_ENVIRONMENT_VARIABLE_NAMES: readonly string[] = Object.freeze(
+  MIGRATION_ENVIRONMENT_VARIABLES.map((entry) => entry.variable),
 );
 
 /** Variable names classified as credentials. */
@@ -402,6 +456,22 @@ export const LOCAL_ADMIN_PARSER_VARIABLES: readonly EnvironmentVariableDefinitio
     ENVIRONMENT_VARIABLE_REGISTRY.filter(
       (entry) =>
         entry.group === "database-connection" || entry.group === "administration-credentials",
+    ),
+  );
+
+/**
+ * Entries consumed by the local migration parser.
+ *
+ * Migration tooling needs the shared connection settings plus the
+ * dedicated migration credentials. It never receives the runtime
+ * application credentials or the bootstrap administrator credentials,
+ * so a migration command cannot be pointed at either of them by
+ * accident.
+ */
+export const MIGRATION_PARSER_VARIABLES: readonly EnvironmentVariableDefinition<unknown>[] =
+  Object.freeze(
+    ENVIRONMENT_VARIABLE_REGISTRY.filter(
+      (entry) => entry.group === "database-connection" || entry.group === "migration-credentials",
     ),
   );
 

@@ -6,6 +6,7 @@ import {
   REDACTED_VALUE,
   RUNTIME_ENVIRONMENTS,
   parseLocalAdminEnvironment,
+  parseLocalMigrationEnvironment,
   parseRuntimeEnvironment,
   summarizeEnvironmentConfig,
 } from "../dist/index.js";
@@ -13,6 +14,7 @@ import {
 // Clearly fake, test-only values. Never real credentials.
 const FAKE_APP_PASSWORD = "fake-app-password-not-real-0123456789";
 const FAKE_ADMIN_PASSWORD = "fake-admin-password-not-real-98765";
+const FAKE_MIGRATOR_PASSWORD = "fake-migrator-password-not-real-24680";
 
 function runtimeSource(overrides = {}) {
   return {
@@ -32,6 +34,15 @@ function adminSource(overrides = {}) {
     ...runtimeSource(),
     BUSINESS_OS_DB_USER: "business_os_local",
     BUSINESS_OS_DB_PASSWORD: FAKE_ADMIN_PASSWORD,
+    ...overrides,
+  };
+}
+
+function migrationSource(overrides = {}) {
+  return {
+    ...runtimeSource(),
+    BUSINESS_OS_DB_MIGRATOR_USER: "business_os_migrator",
+    BUSINESS_OS_DB_MIGRATOR_PASSWORD: FAKE_MIGRATOR_PASSWORD,
     ...overrides,
   };
 }
@@ -527,5 +538,238 @@ describe("diagnostic summaries", () => {
     const summary = summarizeEnvironmentConfig(parseRuntimeEnvironment(runtimeSource()));
 
     expect(Object.isFrozen(summary)).toBe(true);
+  });
+});
+
+describe("local migration parser", () => {
+  test("returns dedicated migrator credentials for local development", () => {
+    const config = parseLocalMigrationEnvironment(migrationSource());
+
+    expect(config.environment).toBe("local");
+    expect(config.database.user).toBe("business_os_migrator");
+    expect(config.database.password).toBe(FAKE_MIGRATOR_PASSWORD);
+    expect(config.database.host).toBe("127.0.0.1");
+    expect(config.database.port).toBe(55432);
+    expect(config.database.database).toBe("business_os_local");
+    expect(config.database.ssl).toBe(false);
+  });
+
+  test("returns a deeply frozen configuration", () => {
+    const config = parseLocalMigrationEnvironment(migrationSource());
+
+    expect(Object.isFrozen(config)).toBe(true);
+    expect(Object.isFrozen(config.database)).toBe(true);
+  });
+
+  test("rejects a missing migrator password", () => {
+    const source = migrationSource();
+    delete source.BUSINESS_OS_DB_MIGRATOR_PASSWORD;
+
+    const error = captureError(() => parseLocalMigrationEnvironment(source));
+
+    expect(error.code).toBe("MISSING_REQUIRED_VALUE");
+    expect(error.variable).toBe("BUSINESS_OS_DB_MIGRATOR_PASSWORD");
+  });
+
+  test("rejects a missing migrator user", () => {
+    const source = migrationSource();
+    delete source.BUSINESS_OS_DB_MIGRATOR_USER;
+
+    const error = captureError(() => parseLocalMigrationEnvironment(source));
+
+    expect(error.code).toBe("MISSING_REQUIRED_VALUE");
+    expect(error.variable).toBe("BUSINESS_OS_DB_MIGRATOR_USER");
+  });
+
+  test("rejects a placeholder migrator password", () => {
+    const error = captureError(() =>
+      parseLocalMigrationEnvironment(
+        migrationSource({
+          BUSINESS_OS_DB_MIGRATOR_PASSWORD: "REPLACE_WITH_STRONG_LOCAL_MIGRATOR_PASSWORD",
+        }),
+      ),
+    );
+
+    expect(error.code).toBe("INVALID_VALUE");
+    expect(error.variable).toBe("BUSINESS_OS_DB_MIGRATOR_PASSWORD");
+  });
+
+  test("rejects an empty migrator password", () => {
+    const error = captureError(() =>
+      parseLocalMigrationEnvironment(migrationSource({ BUSINESS_OS_DB_MIGRATOR_PASSWORD: "" })),
+    );
+
+    expect(error.code).toBe("INVALID_VALUE");
+  });
+
+  test("rejects a non-local runtime for migration", () => {
+    for (const environment of ["test", "staging", "production"]) {
+      const error = captureError(() =>
+        parseLocalMigrationEnvironment(migrationSource({ BUSINESS_OS_ENV: environment })),
+      );
+
+      expect({ environment, code: error.code, variable: error.variable }).toEqual({
+        environment,
+        code: "FORBIDDEN_IN_PRODUCTION",
+        variable: "BUSINESS_OS_ENV",
+      });
+    }
+  });
+
+  test("rejects an undeclared runtime", () => {
+    const error = captureError(() =>
+      parseLocalMigrationEnvironment(migrationSource({ BUSINESS_OS_ENV: "preview" })),
+    );
+
+    expect(error.code).toBe("FORBIDDEN_IN_PRODUCTION");
+  });
+
+  test("rejects a missing runtime declaration", () => {
+    const source = migrationSource();
+    delete source.BUSINESS_OS_ENV;
+
+    expect(captureError(() => parseLocalMigrationEnvironment(source)).code).toBe(
+      "MISSING_REQUIRED_VALUE",
+    );
+  });
+
+  test("rejects an invalid port", () => {
+    const error = captureError(() =>
+      parseLocalMigrationEnvironment(migrationSource({ BUSINESS_OS_DB_PORT: "0" })),
+    );
+
+    expect(error.code).toBe("INVALID_VALUE");
+    expect(error.variable).toBe("BUSINESS_OS_DB_PORT");
+  });
+
+  test("rejects an undeclared platform variable", () => {
+    const error = captureError(() =>
+      parseLocalMigrationEnvironment(migrationSource({ BUSINESS_OS_DB_UNDECLARED: "x" })),
+    );
+
+    expect(error.code).toBe("UNKNOWN_VARIABLE");
+  });
+
+  test("never falls back to application or administrator credentials", () => {
+    const source = migrationSource();
+    delete source.BUSINESS_OS_DB_MIGRATOR_USER;
+    delete source.BUSINESS_OS_DB_MIGRATOR_PASSWORD;
+
+    expect(captureError(() => parseLocalMigrationEnvironment(source)).code).toBe(
+      "MISSING_REQUIRED_VALUE",
+    );
+  });
+
+  test("never returns application or administrator credentials", () => {
+    // Distinct fake role names, because the real local values overlap
+    // with the database name and would make the assertions ambiguous.
+    const fakeAppUser = "fake-app-role-name";
+    const fakeAdminUser = "fake-admin-role-name";
+
+    const config = parseLocalMigrationEnvironment(
+      migrationSource({
+        BUSINESS_OS_DB_APP_USER: fakeAppUser,
+        BUSINESS_OS_DB_APP_PASSWORD: FAKE_APP_PASSWORD,
+        BUSINESS_OS_DB_USER: fakeAdminUser,
+        BUSINESS_OS_DB_PASSWORD: FAKE_ADMIN_PASSWORD,
+      }),
+    );
+    const serialized = JSON.stringify(config);
+
+    expect(config.database.user).toBe("business_os_migrator");
+    expect(config.database.password).toBe(FAKE_MIGRATOR_PASSWORD);
+    expect(serialized).not.toContain(fakeAppUser);
+    expect(serialized).not.toContain(fakeAdminUser);
+    expect(serialized).not.toContain(FAKE_APP_PASSWORD);
+    expect(serialized).not.toContain(FAKE_ADMIN_PASSWORD);
+    expect(Object.keys(config.database).sort()).toEqual([
+      "database",
+      "host",
+      "password",
+      "port",
+      "ssl",
+      "user",
+    ]);
+  });
+
+  test("never leaks a rejected secret in the error", () => {
+    // A placeholder is a real rejection path for the secret schema, and
+    // it carries text that must not survive into the error.
+    const rejected = "REPLACE_WITH_A_SECRET_THAT_MUST_NOT_APPEAR";
+    const error = captureError(() =>
+      parseLocalMigrationEnvironment(
+        migrationSource({ BUSINESS_OS_DB_MIGRATOR_PASSWORD: rejected }),
+      ),
+    );
+
+    expect({ hasVariable: error.variable !== "" }).toEqual({ hasVariable: true });
+    expect(error.message).not.toContain(rejected);
+    expect(error.message).not.toContain("REPLACE_WITH");
+    expect(JSON.stringify(error)).not.toContain(rejected);
+    expect(error.message).toBe(
+      "Environment configuration error: BUSINESS_OS_DB_MIGRATOR_PASSWORD (INVALID_VALUE)",
+    );
+  });
+
+  test("does not attach the rejected value or a raw cause", () => {
+    const rejected = "REPLACE_WITH_ANOTHER_SECRET_0123456789";
+    let caught;
+
+    try {
+      parseLocalMigrationEnvironment(
+        migrationSource({ BUSINESS_OS_DB_MIGRATOR_PASSWORD: rejected }),
+      );
+    } catch (error) {
+      caught = error;
+    }
+
+    expect(caught).toBeInstanceOf(EnvironmentConfigError);
+    expect(Object.hasOwn(caught, "cause")).toBe(false);
+    expect(JSON.stringify(caught, Object.getOwnPropertyNames(caught))).not.toContain(rejected);
+  });
+
+  test("never reads or mutates the ambient process environment", () => {
+    const before = Object.keys(process.env).length;
+
+    parseLocalMigrationEnvironment(migrationSource());
+
+    expect(Object.keys(process.env).length).toBe(before);
+  });
+});
+
+describe("migration credentials stay out of runtime configuration", () => {
+  test("the runtime parser ignores supplied migrator credentials", () => {
+    const config = parseRuntimeEnvironment(
+      runtimeSource({
+        BUSINESS_OS_DB_MIGRATOR_USER: "business_os_migrator",
+        BUSINESS_OS_DB_MIGRATOR_PASSWORD: FAKE_MIGRATOR_PASSWORD,
+      }),
+    );
+
+    expect(config.database.user).toBe("business_os_app");
+    expect(JSON.stringify(config)).not.toContain("business_os_migrator");
+    expect(JSON.stringify(config)).not.toContain(FAKE_MIGRATOR_PASSWORD);
+  });
+
+  test("the administration parser ignores supplied migrator credentials", () => {
+    const config = parseLocalAdminEnvironment(
+      adminSource({
+        BUSINESS_OS_DB_MIGRATOR_USER: "business_os_migrator",
+        BUSINESS_OS_DB_MIGRATOR_PASSWORD: FAKE_MIGRATOR_PASSWORD,
+      }),
+    );
+
+    expect(config.database.user).toBe("business_os_local");
+    expect(JSON.stringify(config)).not.toContain("business_os_migrator");
+    expect(JSON.stringify(config)).not.toContain(FAKE_MIGRATOR_PASSWORD);
+  });
+
+  test("environment summaries never expose a migration secret", () => {
+    const config = parseLocalMigrationEnvironment(migrationSource());
+    const summary = summarizeEnvironmentConfig(config);
+
+    expect(JSON.stringify(summary)).not.toContain(FAKE_MIGRATOR_PASSWORD);
+    expect(summary.BUSINESS_OS_DB_APP_USER).toBe(REDACTED_VALUE);
+    expect(summary.BUSINESS_OS_DB_APP_PASSWORD).toBe(REDACTED_VALUE);
   });
 });

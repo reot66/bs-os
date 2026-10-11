@@ -10,6 +10,9 @@ import {
   ENVIRONMENT_VARIABLE_SCOPES,
   LOCAL_ADMIN_ENVIRONMENT_VARIABLES,
   LOG_LEVELS,
+  MIGRATION_ENVIRONMENT_VARIABLES,
+  MIGRATION_ENVIRONMENT_VARIABLE_NAMES,
+  MIGRATION_PARSER_VARIABLES,
   REDACTED_VALUE,
   REGISTERED_ENVIRONMENT_VARIABLES,
   RUNTIME_ENVIRONMENTS,
@@ -34,6 +37,8 @@ const EXPECTED_VARIABLES = [
   "BUSINESS_OS_DB_APP_PASSWORD",
   "BUSINESS_OS_DB_USER",
   "BUSINESS_OS_DB_PASSWORD",
+  "BUSINESS_OS_DB_MIGRATOR_USER",
+  "BUSINESS_OS_DB_MIGRATOR_PASSWORD",
 ];
 
 describe("registry inventory", () => {
@@ -95,9 +100,10 @@ describe("registry metadata completeness", () => {
 });
 
 describe("secret classification", () => {
-  test("classifies both database passwords as secrets", () => {
+  test("classifies every database password as a secret", () => {
     expect([...SENSITIVE_ENVIRONMENT_VARIABLES].sort()).toEqual([
       "BUSINESS_OS_DB_APP_PASSWORD",
+      "BUSINESS_OS_DB_MIGRATOR_PASSWORD",
       "BUSINESS_OS_DB_PASSWORD",
     ]);
   });
@@ -167,6 +173,9 @@ describe("registry immutability", () => {
       REGISTERED_ENVIRONMENT_VARIABLES,
       RUNTIME_ENVIRONMENT_VARIABLES,
       LOCAL_ADMIN_ENVIRONMENT_VARIABLES,
+      MIGRATION_ENVIRONMENT_VARIABLES,
+      MIGRATION_ENVIRONMENT_VARIABLE_NAMES,
+      MIGRATION_PARSER_VARIABLES,
       DATABASE_CONNECTION_VARIABLES,
       SENSITIVE_ENVIRONMENT_VARIABLES,
       RUNTIME_ENVIRONMENTS,
@@ -211,6 +220,50 @@ describe("registry lookup", () => {
     expect(runtimeNames).not.toContain("BUSINESS_OS_DB_USER");
     expect(runtimeNames).not.toContain("BUSINESS_OS_DB_PASSWORD");
     expect(adminNames).toEqual(["BUSINESS_OS_DB_USER", "BUSINESS_OS_DB_PASSWORD"]);
+  });
+
+  test("separates migration credentials from every other scope", () => {
+    const runtimeNames = RUNTIME_ENVIRONMENT_VARIABLES.map((entry) => entry.variable);
+    const adminNames = LOCAL_ADMIN_ENVIRONMENT_VARIABLES.map((entry) => entry.variable);
+    const migrationNames = MIGRATION_ENVIRONMENT_VARIABLES.map((entry) => entry.variable);
+
+    expect(migrationNames).toEqual([
+      "BUSINESS_OS_DB_MIGRATOR_USER",
+      "BUSINESS_OS_DB_MIGRATOR_PASSWORD",
+    ]);
+
+    // Migration credentials reach neither other boundary.
+    for (const name of migrationNames) {
+      expect(runtimeNames).not.toContain(name);
+      expect(adminNames).not.toContain(name);
+    }
+
+    // And no other credential reaches the migration boundary.
+    for (const name of [...runtimeNames, ...adminNames]) {
+      if (name.endsWith("USER") || name.endsWith("PASSWORD")) {
+        expect(migrationNames).not.toContain(name);
+      }
+    }
+  });
+
+  test("the migration parser receives connection settings plus migrator credentials", () => {
+    const names = MIGRATION_PARSER_VARIABLES.map((entry) => entry.variable);
+
+    expect(names).toEqual([
+      "BUSINESS_OS_DB_HOST",
+      "BUSINESS_OS_DB_PORT",
+      "BUSINESS_OS_DB_NAME",
+      "BUSINESS_OS_DB_SSL",
+      "BUSINESS_OS_DB_MIGRATOR_USER",
+      "BUSINESS_OS_DB_MIGRATOR_PASSWORD",
+    ]);
+  });
+
+  test("exposes the migration variable name list", () => {
+    expect([...MIGRATION_ENVIRONMENT_VARIABLE_NAMES]).toEqual([
+      "BUSINESS_OS_DB_MIGRATOR_USER",
+      "BUSINESS_OS_DB_MIGRATOR_PASSWORD",
+    ]);
   });
 });
 

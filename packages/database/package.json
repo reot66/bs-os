@@ -12,14 +12,20 @@
     }
   },
   "scripts": {
-    "typecheck": "bunx --bun tsc --noEmit -p tsconfig.json",
-    "build": "bun build ./src/index.ts --target node --format esm --packages external --outdir ./dist && bunx --bun tsc --emitDeclarationOnly -p tsconfig.json"
+    "typecheck": "bunx --bun tsc --noEmit -p tsconfig.json && bunx --bun tsc --noEmit -p tsconfig.tools.json",
+    "build": "bun build ./src/index.ts --target node --format esm --packages external --outdir ./dist && bunx --bun tsc --emitDeclarationOnly -p tsconfig.json",
+    "db:generate": "drizzle-kit generate",
+    "db:status": "bun run ./tools/migrations/status-local.ts",
+    "db:apply": "bun run ./tools/migrations/apply-local.ts",
+    "db:provision:migrator": "bun run ./tools/migrations/provision-local-role.ts"
   },
   "dependencies": {
     "drizzle-orm": "0.45.4",
     "pg": "8.23.1"
   },
   "devDependencies": {
-    "@types/pg": "8.23.1"
+    "@business-os/configuration": "workspace:*",
+    "@types/pg": "8.23.1",
+    "drizzle-kit": "0.31.11"
   }
 }
