@@ -22,5 +22,8 @@
     "@business-os/configuration": "workspace:*",
     "@business-os/contracts": "workspace:*",
     "typescript": "5.9.3"
+  },
+  "overrides": {
+    "esbuild": "0.25.12"
   }
 }
