@@ -62,6 +62,29 @@ Until the owner announces the first stable release:
 
 This workflow can change only through an explicit owner decision.
 
+## Pre-Commit Integrity Gate
+
+Before every commit, the implementation agent must:
+
+- Avoid concurrent writers modifying the same repository files. Confirm no other
+  process, editor, or agent is writing to the repository while a task is running.
+- Inspect the exact staged file list before committing. `git status --short` alone
+  is not sufficient.
+- Inspect staged differences, not just working-tree differences. A staged file
+  can differ from both the working tree and the previous commit.
+- Verify protected or unchanged documents have not been modified, especially
+  everything under `agent/`.
+- Run `git diff --cached --check` and review its output.
+- Stop if unexpected staged content appears. Do not commit until the discrepancy
+  is understood and reported.
+- Verify the intended changes again immediately before committing.
+- Never commit files outside the task allowlist.
+
+Rationale: during FND-001, a transient concurrent write to
+`agent/architecture/ARCHITECTURE_MAP.md` was captured by `git add` and committed
+although it was never present in the reviewed content. Staged-content inspection
+is the safeguard against this class of failure. See `docs/tasks/FND-001.md`.
+
 ## Scope control
 
 Every task must define:
