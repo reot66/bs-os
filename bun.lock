@@ -6,6 +6,8 @@
       "name": "business-os",
       "devDependencies": {
         "@biomejs/biome": "2.5.15",
+        "@business-os/configuration": "workspace:*",
+        "@business-os/contracts": "workspace:*",
         "typescript": "5.9.3",
       },
     },

@@ -8,6 +8,7 @@
       "tsconfig.base.json",
       "packages/**",
       "apps/**",
+      "tests/**",
       "!!**/dist"
     ]
   },
