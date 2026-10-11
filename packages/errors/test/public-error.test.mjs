@@ -296,3 +296,176 @@ describe("no implicit side effects", () => {
     expect(Object.keys(process.env).length).toBe(before);
   });
 });
+
+describe("forged identities are downgraded (FND-009-FIX1)", () => {
+  test("an object with the correct prototype normalizes to INTERNAL_ERROR", () => {
+    const forged = Object.create(BusinessOsError.prototype);
+
+    expect(normalizeUnknownError(forged).code).toBe("INTERNAL_ERROR");
+  });
+
+  test("a forged object never reaches trusted public classification", () => {
+    const forged = Object.create(BusinessOsError.prototype);
+
+    for (const [property, value] of Object.entries({
+      code: "FORBIDDEN",
+      category: "authorization",
+      retryable: false,
+      publicMessage: "Leaked privileged detail.",
+    })) {
+      Object.defineProperty(forged, property, { value, enumerable: true, configurable: true });
+    }
+
+    const publicError = toPublicError(forged);
+
+    expect(publicError.code).toBe("INTERNAL_ERROR");
+    expect(publicError.message).toBe("An unexpected error occurred.");
+    expect(JSON.stringify(publicError)).not.toContain("Leaked privileged detail.");
+  });
+
+  test("toPublicError does not throw for a forged object", () => {
+    const forged = Object.create(BusinessOsError.prototype);
+
+    expect(() => {
+      toPublicError(forged);
+    }).not.toThrow();
+  });
+
+  test("an ordinary object with a trusted-looking code is still downgraded", () => {
+    expect(toPublicError({ code: "FORBIDDEN", message: "Fake privileged error" }).code).toBe(
+      "INTERNAL_ERROR",
+    );
+  });
+
+  test("a genuine instance still preserves its identity", () => {
+    const error = new BusinessOsError("CONFLICT");
+
+    expect(normalizeUnknownError(error)).toBe(error);
+    expect(toPublicError(error).code).toBe("CONFLICT");
+  });
+});
+
+describe("hostile objects are contained (FND-009-FIX1)", () => {
+  test("a proxy with a throwing prototype trap normalizes safely", () => {
+    const hostile = new Proxy(
+      {},
+      {
+        getPrototypeOf() {
+          throw new Error("hostile trap");
+        },
+      },
+    );
+
+    let publicError;
+
+    expect(() => {
+      publicError = toPublicError(hostile);
+    }).not.toThrow();
+
+    expect(publicError.code).toBe("INTERNAL_ERROR");
+    expect(publicError.message).toBe("An unexpected error occurred.");
+  });
+
+  test("a revoked proxy is handled safely", () => {
+    const revocable = Proxy.revocable({}, {});
+    revocable.revoke();
+
+    let publicError;
+
+    expect(() => {
+      publicError = toPublicError(revocable.proxy);
+    }).not.toThrow();
+
+    expect(publicError.code).toBe("INTERNAL_ERROR");
+  });
+
+  test("a proxy with a lying has trap and throwing getter is contained", () => {
+    const hostile = new Proxy(
+      {},
+      {
+        has() {
+          return true;
+        },
+        get() {
+          throw new Error("no access");
+        },
+      },
+    );
+
+    let publicError;
+
+    expect(() => {
+      publicError = toPublicError(hostile);
+    }).not.toThrow();
+
+    expect(publicError.code).toBe("INTERNAL_ERROR");
+  });
+
+  test("a hostile proxy cause is preserved internally but never disclosed", () => {
+    const hostile = new Proxy(
+      {},
+      {
+        getPrototypeOf() {
+          throw new Error("hostile trap");
+        },
+      },
+    );
+
+    const normalized = normalizeUnknownError(hostile);
+
+    expect(normalized.cause).toBe(hostile);
+    expect(JSON.stringify(normalized)).not.toContain("hostile trap");
+    expect(JSON.stringify(toPublicError(normalized))).not.toContain("hostile trap");
+  });
+
+  test("unknown objects still normalize to INTERNAL_ERROR", () => {
+    for (const value of [{}, [], "text", 7, true, null, undefined]) {
+      expect(toPublicError(value).code).toBe("INTERNAL_ERROR");
+    }
+  });
+});
+
+describe("public shape is unchanged by the hardening (FND-009-FIX1)", () => {
+  test("public serialization still returns exactly code, message, and retryable", () => {
+    for (const code of Object.keys(ERROR_CATALOG)) {
+      expect(Object.keys(toPublicError(new BusinessOsError(code))).sort()).toEqual(PUBLIC_KEYS);
+      const serialized = JSON.parse(JSON.stringify(new BusinessOsError(code)));
+
+      expect(Object.keys(toPublicError(new BusinessOsError(code))).sort()).toEqual(PUBLIC_KEYS);
+      expect(Object.keys(serialized).sort()).toEqual(PUBLIC_KEYS);
+    }
+  });
+
+  test("native Error cause behaviour remains intact", () => {
+    const cause = new Error("original failure");
+    const error = new BusinessOsError("DEPENDENCY_UNAVAILABLE", { cause });
+
+    expect(error.cause).toBe(cause);
+    expect(cause.message).toBe("original failure");
+    expect(Object.keys(error)).not.toContain("cause");
+  });
+
+  test("internal diagnostics remain absent from public output", () => {
+    const error = new BusinessOsError("DEPENDENCY_UNAVAILABLE", {
+      internalMessage: SQL_SENTINEL,
+      cause: new Error(SECRET_SENTINEL),
+      context: { query: CONTEXT_SENTINEL },
+    });
+
+    const serialized = JSON.stringify(error);
+
+    for (const sentinel of [SECRET_SENTINEL, SQL_SENTINEL, CONTEXT_SENTINEL]) {
+      expect(serialized).not.toContain(sentinel);
+    }
+
+    expect(Object.keys(JSON.parse(serialized)).sort()).toEqual(PUBLIC_KEYS);
+  });
+
+  test("no global exception handler is installed by normalization", () => {
+    const before = process.listenerCount ? process.listenerCount("uncaughtException") : 0;
+
+    toPublicError(new Error(SECRET_SENTINEL));
+
+    expect(process.listenerCount ? process.listenerCount("uncaughtException") : 0).toBe(before);
+  });
+});

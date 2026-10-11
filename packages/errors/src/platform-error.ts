@@ -6,6 +6,11 @@
  * an original cause, private context — is kept strictly out of the
  * public surface.
  *
+ * Security-critical classification is immutable and is derived from the
+ * immutable catalog on every read, so a caller cannot swap `code`,
+ * `category`, `retryable`, or `publicMessage` and have that change what
+ * the error discloses.
+ *
  * The class uses only standard JavaScript Error capabilities, so it
  * carries no runtime-specific behaviour.
  */
@@ -51,14 +56,22 @@ function defineHidden(target: object, key: string, value: unknown): void {
 }
 
 export class BusinessOsError extends Error {
-  /** Stable platform error code. */
-  readonly code: ErrorCode;
-  /** Classification derived from the catalog. */
-  readonly category: ErrorCategory;
-  /** Retryability derived from the catalog. Advisory only. */
-  readonly retryable: boolean;
-  /** Generic, non-sensitive message safe to return to a client. */
-  readonly publicMessage: string;
+  /**
+   * Private brand.
+   *
+   * It is reachable only from inside this class body, so an object
+   * produced by `Object.create(BusinessOsError.prototype)` — which has
+   * the prototype but not this field — is not a genuine platform error.
+   */
+  readonly #brand = true;
+
+  /**
+   * The error code, held privately so it cannot be reassigned.
+   *
+   * Every classification below is derived from the catalog using this
+   * value, never from a mutable public field.
+   */
+  readonly #code: ErrorCode;
 
   constructor(code: ErrorCode, options: BusinessOsErrorOptions = {}) {
     const entry: ErrorCatalogEntry = ERROR_CATALOG[code];
@@ -72,11 +85,8 @@ export class BusinessOsError extends Error {
 
     super(entry.publicMessage);
 
+    this.#code = code;
     this.name = "BusinessOsError";
-    this.code = code;
-    this.category = entry.category;
-    this.retryable = entry.retryable;
-    this.publicMessage = entry.publicMessage;
 
     if (options.cause !== undefined) {
       // Preserve native cause behaviour, including for non-Error values.
@@ -97,17 +107,66 @@ export class BusinessOsError extends Error {
     }
   }
 
+  /** Stable platform error code. Read-only. */
+  get code(): ErrorCode {
+    return this.#code;
+  }
+
+  /** Classification derived from the catalog. Read-only. */
+  get category(): ErrorCategory {
+    return ERROR_CATALOG[this.#code].category;
+  }
+
+  /** Retryability derived from the catalog. Read-only and advisory. */
+  get retryable(): boolean {
+    return ERROR_CATALOG[this.#code].retryable;
+  }
+
+  /**
+   * Generic, non-sensitive message safe to return to a client.
+   *
+   * Read from the immutable catalog on every access, so replacing this
+   * property is impossible and cannot change what is disclosed.
+   */
+  get publicMessage(): string {
+    return ERROR_CATALOG[this.#code].publicMessage;
+  }
+
+  /**
+   * Recognize a genuine platform error.
+   *
+   * A private-field presence check cannot be spoofed by setting a
+   * property, and it does not read any public property. The `in`
+   * operator does not invoke getters, but it can still reach a proxy
+   * `has` trap, so a hostile or revoked proxy is contained here and
+   * reported as "not a platform error" rather than being allowed to
+   * throw during normalization.
+   */
+  static hasBrand(value: unknown): value is BusinessOsError {
+    if (value === null || (typeof value !== "object" && typeof value !== "function")) {
+      return false;
+    }
+
+    try {
+      return #brand in (value as object);
+    } catch {
+      return false;
+    }
+  }
+
   /**
    * Serialize to exactly the approved public shape.
    *
-   * Without this, class properties, a native `cause`, or a stack trace
-   * could leak into a serialized payload.
+   * Built from the catalog rather than from a stored public field, so
+   * tampering with any instance property cannot change the output.
    */
   toJSON(): Readonly<PublicError> {
+    const entry = ERROR_CATALOG[this.#code];
+
     return Object.freeze({
-      code: this.code,
-      message: this.publicMessage,
-      retryable: this.retryable,
+      code: this.#code,
+      message: entry.publicMessage,
+      retryable: entry.retryable,
     });
   }
 }

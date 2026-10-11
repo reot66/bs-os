@@ -1,11 +1,26 @@
 import { describe, expect, test } from "bun:test";
 
-import { BusinessOsError, ERROR_CATALOG, isBusinessOsError } from "../dist/index.js";
+import {
+  BusinessOsError,
+  ERROR_CATALOG,
+  isBusinessOsError,
+  normalizeUnknownError,
+  toPublicError,
+} from "../dist/index.js";
 
 // Fake, test-only sentinels. Never real credentials or real SQL.
 const SECRET_SENTINEL = "TEST_SECRET_DO_NOT_EXPOSE";
 const SQL_SENTINEL = "TEST_SQL_INTERNAL_DETAIL";
 const CONTEXT_SENTINEL = "TEST_PRIVATE_CONTEXT";
+const SENTINELS = [SECRET_SENTINEL, SQL_SENTINEL, CONTEXT_SENTINEL];
+
+function expectNoSentinel(value) {
+  const text = typeof value === "string" ? value : JSON.stringify(value);
+
+  for (const sentinel of SENTINELS) {
+    expect({ sentinel, present: text.includes(sentinel) }).toEqual({ sentinel, present: false });
+  }
+}
 
 describe("native Error behaviour", () => {
   test("extends the native Error", () => {
@@ -264,5 +279,161 @@ describe("type guard", () => {
     for (const value of [null, undefined, 0, "", false, Symbol("x")]) {
       expect(isBusinessOsError(value)).toBe(false);
     }
+  });
+});
+
+describe("immutable classification (FND-009-FIX1)", () => {
+  test("publicMessage cannot be replaced with a sensitive value", () => {
+    const error = new BusinessOsError("VALIDATION_ERROR");
+
+    expect(() => {
+      error.publicMessage = `leaked ${SECRET_SENTINEL}`;
+    }).toThrow(TypeError);
+
+    expect(error.publicMessage).toBe("The request is invalid.");
+  });
+
+  test("JSON serialization cannot disclose a tampered public message", () => {
+    const error = new BusinessOsError("VALIDATION_ERROR");
+
+    try {
+      error.publicMessage = `leaked ${SECRET_SENTINEL}`;
+    } catch {
+      // Expected: the property is read-only.
+    }
+
+    const serialized = JSON.stringify(error);
+
+    expect(serialized).not.toContain(SECRET_SENTINEL);
+    expect(JSON.parse(serialized).message).toBe("The request is invalid.");
+  });
+
+  test("classification properties cannot be reassigned", () => {
+    const error = new BusinessOsError("VALIDATION_ERROR");
+
+    for (const property of ["code", "category", "retryable", "publicMessage"]) {
+      expect(() => {
+        error[property] = "tampered";
+      }).toThrow(TypeError);
+    }
+  });
+
+  test("tampering cannot change trusted classification", () => {
+    const error = new BusinessOsError("VALIDATION_ERROR");
+
+    for (const property of ["code", "category", "retryable", "publicMessage"]) {
+      try {
+        error[property] = "tampered";
+      } catch {
+        // Expected: the property is read-only.
+      }
+    }
+
+    expect({ code: error.code, category: error.category, retryable: error.retryable }).toEqual({
+      code: "VALIDATION_ERROR",
+      category: "validation",
+      retryable: false,
+    });
+  });
+
+  test("a tampered error still serializes to the catalog shape", () => {
+    const error = new BusinessOsError("RATE_LIMITED", {
+      internalMessage: SQL_SENTINEL,
+      cause: new Error(SECRET_SENTINEL),
+      context: { query: CONTEXT_SENTINEL },
+    });
+
+    try {
+      error.publicMessage = `leaked ${SECRET_SENTINEL}`;
+      error.code = "INTERNAL_ERROR";
+    } catch {
+      // Expected: read-only.
+    }
+
+    const parsed = JSON.parse(JSON.stringify(error));
+
+    expect(Object.keys(parsed).sort()).toEqual(["code", "message", "retryable"]);
+    expect(parsed.code).toBe("RATE_LIMITED");
+    expect(parsed.message).toBe(ERROR_CATALOG.RATE_LIMITED.publicMessage);
+    expect(parsed.retryable).toBe(true);
+    expectNoSentinel(JSON.stringify(parsed));
+  });
+
+  test("instanceof still recognizes genuine instances", () => {
+    const error = new BusinessOsError("NOT_FOUND");
+
+    expect(error instanceof BusinessOsError).toBe(true);
+    expect(error instanceof Error).toBe(true);
+  });
+});
+
+describe("genuine identity is not forgeable (FND-009-FIX1)", () => {
+  test("an object with the correct prototype is not a platform error", () => {
+    const forged = Object.create(BusinessOsError.prototype);
+
+    expect(forged instanceof BusinessOsError).toBe(true);
+    expect(isBusinessOsError(forged)).toBe(false);
+  });
+
+  test("a forged object cannot receive a trusted classification", () => {
+    const forged = Object.create(BusinessOsError.prototype);
+
+    // Own properties shadow the prototype accessors, so the forged object
+    // presents a convincing-looking classification on the surface.
+    for (const [property, value] of Object.entries({
+      code: "FORBIDDEN",
+      category: "authorization",
+      retryable: false,
+      publicMessage: "Leaked privileged detail.",
+    })) {
+      Object.defineProperty(forged, property, { value, enumerable: true, configurable: true });
+    }
+
+    expect(isBusinessOsError(forged)).toBe(false);
+    expect(normalizeUnknownError(forged).code).toBe("INTERNAL_ERROR");
+    expect(JSON.stringify(toPublicError(forged))).not.toContain("Leaked privileged detail.");
+  });
+
+  test("a brand cannot be forged by copying own properties", () => {
+    const genuine = new BusinessOsError("FORBIDDEN");
+    const clone = Object.create(BusinessOsError.prototype);
+
+    for (const key of Object.keys(genuine)) {
+      Object.defineProperty(clone, key, {
+        value: genuine[key],
+        enumerable: true,
+        configurable: true,
+      });
+    }
+
+    expect(isBusinessOsError(clone)).toBe(false);
+  });
+
+  test("the brand check contains hostile proxies without throwing", () => {
+    const hostile = new Proxy(
+      {},
+      {
+        getPrototypeOf() {
+          throw new Error("hostile trap");
+        },
+      },
+    );
+
+    expect(() => {
+      isBusinessOsError(hostile);
+    }).not.toThrow();
+
+    expect(isBusinessOsError(hostile)).toBe(false);
+  });
+
+  test("the brand check contains a revoked proxy", () => {
+    const revocable = Proxy.revocable({}, {});
+    revocable.revoke();
+
+    expect(() => {
+      isBusinessOsError(revocable.proxy);
+    }).not.toThrow();
+
+    expect(isBusinessOsError(revocable.proxy)).toBe(false);
   });
 });
