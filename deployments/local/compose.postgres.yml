@@ -1,0 +1,35 @@
+name: business-os-local
+
+services:
+  postgres:
+    image: postgres:18.6-bookworm
+    restart: "no"
+
+    environment:
+      POSTGRES_DB: ${BUSINESS_OS_DB_NAME:?Database name is required}
+      POSTGRES_USER: ${BUSINESS_OS_DB_USER:?Database user is required}
+      POSTGRES_PASSWORD: ${BUSINESS_OS_DB_PASSWORD:?Database password is required}
+      POSTGRES_INITDB_ARGS: "--auth-host=scram-sha-256"
+
+    ports:
+      - "127.0.0.1:${BUSINESS_OS_DB_PORT:-55432}:5432"
+
+    volumes:
+      - business_os_postgres_data:/var/lib/postgresql
+
+    healthcheck:
+      test:
+        - CMD-SHELL
+        - >-
+          pg_isready -q -h 127.0.0.1
+          -U "$${POSTGRES_USER}"
+          -d "$${POSTGRES_DB}"
+      interval: 5s
+      timeout: 3s
+      retries: 15
+      start_period: 15s
+
+    stop_grace_period: 30s
+
+volumes:
+  business_os_postgres_data:
