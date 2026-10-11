@@ -31,9 +31,10 @@ const INTERNAL_ERROR_PAYLOAD: Readonly<PublicError> = Object.freeze({
 /**
  * Recognize a genuine platform error.
  *
- * This is an identity check backed by a private brand, not duck typing.
- * A plain object that merely looks like a platform error is rejected,
- * and so is an object that merely carries the right prototype.
+ * This is an identity check against a module-private registry, not duck
+ * typing and not a prototype check. A plain object that merely looks like
+ * a platform error is rejected, an object that merely carries the right
+ * prototype is rejected, and a crafted proxy cannot satisfy the check.
  */
 export function isBusinessOsError(value: unknown): value is BusinessOsError {
   return BusinessOsError.hasBrand(value);

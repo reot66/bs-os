@@ -469,3 +469,90 @@ describe("public shape is unchanged by the hardening (FND-009-FIX1)", () => {
     expect(process.listenerCount ? process.listenerCount("uncaughtException") : 0).toBe(before);
   });
 });
+
+describe("forged identity can never select a privileged code (FND-009-FIX2)", () => {
+  const FORGED = [
+    ["Object.create(prototype)", () => Object.create(BusinessOsError.prototype)],
+    ["proxy lying has trap", () => new Proxy({}, { has: () => true })],
+    [
+      "proxy with forged prototype",
+      () => new Proxy({}, { getPrototypeOf: () => BusinessOsError.prototype }),
+    ],
+    [
+      "proxy with lying has and forged prototype",
+      () => new Proxy({}, { has: () => true, getPrototypeOf: () => BusinessOsError.prototype }),
+    ],
+  ];
+
+  test("forged values normalize to INTERNAL_ERROR", () => {
+    for (const [label, create] of FORGED) {
+      expect({ label, code: normalizeUnknownError(create()).code }).toEqual({
+        label,
+        code: "INTERNAL_ERROR",
+      });
+    }
+  });
+
+  test("forged values cannot obtain a privileged public code", () => {
+    for (const [label, create] of FORGED) {
+      const forged = create();
+
+      // Present a convincing surface without being genuine.
+      for (const [property, value] of Object.entries({
+        code: "FORBIDDEN",
+        category: "authorization",
+        retryable: false,
+        publicMessage: "Leaked privileged detail.",
+      })) {
+        Object.defineProperty(forged, property, { value, enumerable: true, configurable: true });
+      }
+
+      const publicError = toPublicError(forged);
+
+      expect({ label, code: publicError.code, message: publicError.message }).toEqual({
+        label,
+        code: "INTERNAL_ERROR",
+        message: "An unexpected error occurred.",
+      });
+      expect(JSON.stringify(publicError)).not.toContain("Leaked privileged detail.");
+    }
+  });
+
+  test("forged values never throw during conversion", () => {
+    for (const [, create] of FORGED) {
+      expect(() => {
+        toPublicError(create());
+      }).not.toThrow();
+    }
+  });
+
+  test("a revoked proxy cannot obtain a privileged public code", () => {
+    const revocable = Proxy.revocable({}, {});
+    revocable.revoke();
+
+    expect(toPublicError(revocable.proxy).code).toBe("INTERNAL_ERROR");
+  });
+
+  test("genuine errors retain their original classification", () => {
+    for (const code of ["FORBIDDEN", "RATE_LIMITED", "DEPENDENCY_UNAVAILABLE"]) {
+      const error = new BusinessOsError(code);
+
+      expect({ code: toPublicError(error).code, recognized: isBusinessOsError(error) }).toEqual({
+        code,
+        recognized: true,
+      });
+      expect(normalizeUnknownError(error)).toBe(error);
+    }
+  });
+
+  test("genuine errors keep retryability and cause behaviour", () => {
+    const cause = new Error("original failure");
+    const error = new BusinessOsError("DEPENDENCY_UNAVAILABLE", { cause });
+    const publicError = toPublicError(error);
+
+    expect({ retryable: publicError.retryable, causePreserved: error.cause === cause }).toEqual({
+      retryable: true,
+      causePreserved: true,
+    });
+  });
+});

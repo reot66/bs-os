@@ -11,6 +11,13 @@
  * `category`, `retryable`, or `publicMessage` and have that change what
  * the error discloses.
  *
+ * Genuine identity is proven by a module-private `WeakSet` that only the
+ * constructor can populate. That is deliberately chosen over a private
+ * field brand: per the language specification a `PrivateIdentifier in`
+ * check consults a proxy's `has` trap, so a prototype-based brand can be
+ * satisfied by a crafted proxy on some engines. Weak-set membership is an
+ * internal identity test that no proxy trap can intercept.
+ *
  * The class uses only standard JavaScript Error capabilities, so it
  * carries no runtime-specific behaviour.
  */
@@ -55,16 +62,22 @@ function defineHidden(target: object, key: string, value: unknown): void {
   });
 }
 
-export class BusinessOsError extends Error {
-  /**
-   * Private brand.
-   *
-   * It is reachable only from inside this class body, so an object
-   * produced by `Object.create(BusinessOsError.prototype)` — which has
-   * the prototype but not this field — is not a genuine platform error.
-   */
-  readonly #brand = true;
+/**
+ * Module-private registry of genuine platform errors.
+ *
+ * This is intentionally never exported: exposing it would let any caller
+ * register an arbitrary object as a trusted platform error. Only the
+ * constructor below can add to it, and only after the error code has been
+ * validated against the catalog.
+ *
+ * `WeakSet.has` is an internal identity test. Unlike a prototype chain
+ * walk or a `PrivateIdentifier in` check, it cannot be influenced by any
+ * proxy trap, so a forged prototype, a lying `has` trap, or a revoked
+ * proxy can never satisfy it.
+ */
+const GENUINE_ERRORS = new WeakSet<BusinessOsError>();
 
+export class BusinessOsError extends Error {
   /**
    * The error code, held privately so it cannot be reassigned.
    *
@@ -85,6 +98,9 @@ export class BusinessOsError extends Error {
 
     super(entry.publicMessage);
 
+    // Register only after the code has been validated, so an object that
+    // exists is always a fully constructed, catalog-backed error.
+    GENUINE_ERRORS.add(this);
     this.#code = code;
     this.name = "BusinessOsError";
 
@@ -135,12 +151,16 @@ export class BusinessOsError extends Error {
   /**
    * Recognize a genuine platform error.
    *
-   * A private-field presence check cannot be spoofed by setting a
-   * property, and it does not read any public property. The `in`
-   * operator does not invoke getters, but it can still reach a proxy
-   * `has` trap, so a hostile or revoked proxy is contained here and
-   * reported as "not a platform error" rather than being allowed to
-   * throw during normalization.
+   * Membership of `GENUINE_ERRORS` is an internal identity test, so no
+   * proxy trap can be reached and no public property is read: a `has`,
+   * `get`, or `getPrototypeOf` trap is never invoked, and a fabricated
+   * prototype is irrelevant. The set is module-private and is populated
+   * only by the constructor, so there is no way to register an arbitrary
+   * object as genuine.
+   *
+   * The `try`/`catch` is defensive only. A revoked proxy is already
+   * rejected without error, but it guarantees that no exotic value can
+   * make this security boundary throw.
    */
   static hasBrand(value: unknown): value is BusinessOsError {
     if (value === null || (typeof value !== "object" && typeof value !== "function")) {
@@ -148,7 +168,7 @@ export class BusinessOsError extends Error {
     }
 
     try {
-      return #brand in (value as object);
+      return GENUINE_ERRORS.has(value as BusinessOsError);
     } catch {
       return false;
     }

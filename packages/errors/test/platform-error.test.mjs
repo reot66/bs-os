@@ -437,3 +437,152 @@ describe("genuine identity is not forgeable (FND-009-FIX1)", () => {
     expect(isBusinessOsError(revocable.proxy)).toBe(false);
   });
 });
+
+describe("genuine identity is unforgeable (FND-009-FIX2)", () => {
+  /** Every proxy trick that could otherwise satisfy a brand-style check. */
+  function forgeryVectors() {
+    const revoked = Proxy.revocable({}, {});
+    revoked.revoke();
+
+    return [
+      ["Object.create(prototype)", Object.create(BusinessOsError.prototype)],
+      ["proxy lying has trap", new Proxy({}, { has: () => true })],
+      [
+        "proxy with forged prototype",
+        new Proxy({}, { getPrototypeOf: () => BusinessOsError.prototype }),
+      ],
+      [
+        "proxy with lying has and forged prototype",
+        new Proxy(
+          {},
+          {
+            has: () => true,
+            getPrototypeOf: () => BusinessOsError.prototype,
+          },
+        ),
+      ],
+      ["revoked proxy", revoked.proxy],
+    ];
+  }
+
+  test("a real instance is recognized", () => {
+    expect(isBusinessOsError(new BusinessOsError("FORBIDDEN"))).toBe(true);
+    expect(isBusinessOsError(new BusinessOsError("INTERNAL_ERROR"))).toBe(true);
+  });
+
+  test.each(forgeryVectors())("rejects %s", (_label, value) => {
+    expect(isBusinessOsError(value)).toBe(false);
+  });
+
+  test("a proxy wrapping a genuine error is not treated as genuine", () => {
+    // Fail closed: a proxy can lie, so it is never trusted even when it
+    // wraps a real error.
+    const wrapped = new Proxy(new BusinessOsError("FORBIDDEN"), {});
+
+    expect(isBusinessOsError(wrapped)).toBe(false);
+  });
+
+  test("hostile get, has, and getPrototypeOf traps never execute", () => {
+    const fired = [];
+
+    const hostile = new Proxy(
+      {},
+      {
+        has() {
+          fired.push("has");
+          return true;
+        },
+        get() {
+          fired.push("get");
+          return 1;
+        },
+        getPrototypeOf() {
+          fired.push("getPrototypeOf");
+          return BusinessOsError.prototype;
+        },
+      },
+    );
+
+    const result = isBusinessOsError(hostile);
+
+    expect({ result, fired }).toEqual({ result: false, fired: [] });
+  });
+
+  test("a revoked proxy is rejected without throwing", () => {
+    const revocable = Proxy.revocable({}, {});
+    revocable.revoke();
+
+    expect(() => {
+      isBusinessOsError(revocable.proxy);
+    }).not.toThrow();
+
+    expect(isBusinessOsError(revocable.proxy)).toBe(false);
+  });
+
+  test("no mechanism is exposed for registering a foreign object", async () => {
+    const module = await import("../dist/index.js");
+
+    expect(Object.keys(module).sort()).toEqual([
+      "BusinessOsError",
+      "ERROR_CATALOG",
+      "ERROR_CATEGORIES",
+      "ERROR_CODES",
+      "getErrorCatalogEntry",
+      "isBusinessOsError",
+      "isErrorCode",
+      "normalizeUnknownError",
+      "toPublicError",
+    ]);
+
+    for (const key of Object.keys(module)) {
+      expect({ key, type: typeof module[key] }).toEqual({
+        key,
+        type: expect.stringMatching(/^(string|number|boolean|function|object)$/),
+      });
+    }
+
+    // Nothing on the class can register an arbitrary object either.
+    const classKeys = [
+      ...Object.getOwnPropertyNames(BusinessOsError),
+      ...Object.getOwnPropertyNames(BusinessOsError.prototype),
+    ];
+
+    for (const key of classKeys) {
+      expect({ key, registers: /^(register|add|set|brand|trust)$/i.test(key) }).toEqual({
+        key,
+        registers: false,
+      });
+    }
+  });
+
+  test("the registry is not reachable as an exported symbol", () => {
+    // The WeakSet is module-private: nothing enumerable exposes it.
+    expect(Object.getOwnPropertySymbols(BusinessOsError.prototype)).toEqual([]);
+    expect(Object.getOwnPropertyNames(BusinessOsError.prototype).join(",")).not.toContain(
+      "WeakSet",
+    );
+  });
+
+  test("genuine instances retain their original classification", () => {
+    for (const code of [
+      "VALIDATION_ERROR",
+      "RATE_LIMITED",
+      "DEPENDENCY_UNAVAILABLE",
+      "NOT_FOUND",
+    ]) {
+      const error = new BusinessOsError(code);
+
+      expect({
+        code: error.code,
+        category: error.category,
+        retryable: error.retryable,
+        recognized: isBusinessOsError(error),
+      }).toEqual({
+        code,
+        category: ERROR_CATALOG[code].category,
+        retryable: ERROR_CATALOG[code].retryable,
+        recognized: true,
+      });
+    }
+  });
+});
